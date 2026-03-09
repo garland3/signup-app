@@ -9,6 +9,7 @@ COPY pyproject.toml .
 RUN python3.11 -m pip install --no-cache-dir .
 
 COPY app/ app/
+COPY mocks/ mocks/
 COPY static/ static/
 
 RUN useradd -r appuser && chown -R appuser:appuser /app

@@ -6,7 +6,7 @@ from starlette.responses import JSONResponse
 
 from app.core.config import Settings
 
-PUBLIC_PATHS = {"/api/health", "/api/keys/verify"}
+PUBLIC_PATHS = {"/api/health"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

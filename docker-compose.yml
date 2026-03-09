@@ -1,16 +1,11 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: signup
-      POSTGRES_PASSWORD: signup
-      POSTGRES_DB: signup_app
+  litellm-mock:
+    build: .
+    command: ["python", "-m", "uvicorn", "mocks.litellm_mock:app", "--host", "0.0.0.0", "--port", "4000"]
     ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - "4000:4000"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U signup -d signup_app"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health')"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -21,8 +16,5 @@ services:
       - "8000:8000"
     env_file: .env
     depends_on:
-      postgres:
+      litellm-mock:
         condition: service_healthy
-
-volumes:
-  postgres-data:
