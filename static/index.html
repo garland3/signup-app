@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Keys</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>API Keys</h1>
+            <span id="user-email"></span>
+        </header>
+
+        <div class="actions">
+            <button id="create-btn" onclick="showCreateModal()">Create new key</button>
+        </div>
+
+        <table id="keys-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Key</th>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="keys-body"></tbody>
+        </table>
+
+        <p id="no-keys" class="hidden">No API keys yet. Create one to get started.</p>
+    </div>
+
+    <!-- Create Key Modal -->
+    <div id="create-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>Create API Key</h2>
+            <label for="key-name">Name</label>
+            <input type="text" id="key-name" placeholder="e.g. Production Server">
+            <div class="modal-actions">
+                <button onclick="hideCreateModal()">Cancel</button>
+                <button class="primary" onclick="createKey()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Show Key Modal (one-time display) -->
+    <div id="show-key-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>Your API Key</h2>
+            <p class="warning">Copy this key now. You will not be able to see it again.</p>
+            <div class="key-display">
+                <code id="full-key"></code>
+                <button onclick="copyKey()">Copy</button>
+            </div>
+            <div class="modal-actions">
+                <button class="primary" onclick="hideShowKeyModal()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
