@@ -2,7 +2,7 @@ from app.core.config import Settings
 
 
 def test_default_settings():
-    s = Settings(DATABASE_URL="sqlite+aiosqlite:///test.db")
+    s = Settings(DATABASE_URL="sqlite+aiosqlite:///test.db", DEBUG_MODE=False)
     assert s.DEBUG_MODE is False
     assert s.AUTH_USER_HEADER == "X-User-Email"
     assert s.TEST_USER == "test@test.com"

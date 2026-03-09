@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
@@ -10,6 +11,8 @@ from app.database import init_db, create_tables
 from app.routes.health import router as health_router
 from app.routes.users import router as users_router
 from app.routes.keys import router as keys_router
+
+STATIC_DIR = Path(__file__).parent.parent / "static"
 
 
 @asynccontextmanager
@@ -29,9 +32,12 @@ def create_app() -> FastAPI:
     app.include_router(users_router)
     app.include_router(keys_router)
 
-    static_dir = Path(__file__).parent.parent / "static"
-    if static_dir.exists():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True))
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)))
+
+        @app.get("/")
+        async def serve_frontend():
+            return FileResponse(STATIC_DIR / "index.html")
 
     return app
 
