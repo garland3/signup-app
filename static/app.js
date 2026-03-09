@@ -33,11 +33,7 @@ function renderKeys() {
         var status = k.is_active ? "Active" : "Blocked";
         var statusClass = k.is_active ? "status-active" : "status-revoked";
         var spend = k.spend != null ? "$" + Number(k.spend).toFixed(2) : "-";
-        var actions = "";
-
-        if (k.is_active) {
-            actions += '<button class="danger" onclick="deleteKey(\'' + escapeAttr(k.id) + '\')">Delete</button>';
-        }
+        var actions = '<button class="danger" onclick="deleteKey(\'' + escapeAttr(k.id) + '\')">Delete</button>';
 
         return '<tr>' +
             '<td>' + escapeHtml(k.name) + '</td>' +

@@ -37,7 +37,11 @@ def _mask_key(token: str) -> str:
 
 
 def _format_key_response(key_data: dict, include_full_key: str | None = None) -> dict:
-    """Format a LiteLLM key object for the frontend."""
+    """Format a LiteLLM key object for the frontend.
+
+    Never includes the full key unless include_full_key is explicitly passed
+    (only at creation time).
+    """
     data = {
         "id": key_data.get("token_id", key_data.get("token", "")),
         "name": key_data.get("key_alias") or key_data.get("key_name", ""),
@@ -57,6 +61,29 @@ def _format_key_response(key_data: dict, include_full_key: str | None = None) ->
     if include_full_key:
         data["key"] = include_full_key
     return data
+
+
+async def _verify_key_ownership(
+    client: LiteLLMClient, token: str, user_email: str
+) -> dict:
+    """Fetch key info and verify the authenticated user owns it.
+
+    Returns the key record if ownership is confirmed.
+    Raises 404 if the key doesn't exist or doesn't belong to the user.
+    """
+    try:
+        key_info = await client.get_key_info(key=token)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    # key_info may be nested under an "info" key depending on LiteLLM version
+    info = key_info.get("info", key_info)
+    key_owner = info.get("user_id", "")
+
+    if key_owner != user_email:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    return info
 
 
 @router.post("/keys", status_code=201)
@@ -102,6 +129,9 @@ async def list_keys(request: Request):
 @router.patch("/keys/{token}")
 async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     client = _get_client()
+    user_email = request.state.user_email
+
+    await _verify_key_ownership(client, token, user_email)
 
     kwargs = {}
     if body.key_alias is not None:
@@ -122,34 +152,49 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
-    return result
+    return _format_key_response(result)
 
 
 @router.delete("/keys/{token}")
 async def delete_key(token: str, request: Request):
     client = _get_client()
+    user_email = request.state.user_email
+
+    await _verify_key_ownership(client, token, user_email)
+
     try:
         result = await client.delete_key(keys=[token])
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
-    return result
+
+    return {"deleted": True}
 
 
 @router.post("/keys/{token}/block")
 async def block_key(token: str, request: Request):
     client = _get_client()
+    user_email = request.state.user_email
+
+    await _verify_key_ownership(client, token, user_email)
+
     try:
         result = await client.block_key(key=token)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
-    return result
+
+    return _format_key_response(result)
 
 
 @router.post("/keys/{token}/unblock")
 async def unblock_key(token: str, request: Request):
     client = _get_client()
+    user_email = request.state.user_email
+
+    await _verify_key_ownership(client, token, user_email)
+
     try:
         result = await client.unblock_key(key=token)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
-    return result
+
+    return _format_key_response(result)

@@ -81,32 +81,164 @@ async def test_list_keys(app):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_delete_key(app):
+async def test_delete_key_with_ownership_check(app):
+    # get_key_info returns key owned by alice
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "Alice Key",
+            "user_id": "alice@example.com",
+            "blocked": False,
+        })
+    )
     respx.post(f"{LITELLM}/key/delete").mock(
-        return_value=Response(200, json={"deleted_keys": ["sk-abc123"]})
+        return_value=Response(200, json={"deleted_keys": ["tok_abc123"]})
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        r = await c.delete("/api/keys/sk-abc123", headers=AUTH)
+        r = await c.delete("/api/keys/tok_abc123", headers=AUTH)
 
     assert r.status_code == 200
+    assert r.json() == {"deleted": True}
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_update_key(app):
+async def test_delete_key_denied_for_other_user(app):
+    # get_key_info returns key owned by bob, not alice
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_bob123",
+            "token": "sk-bobkey",
+            "key_alias": "Bob Key",
+            "user_id": "bob@example.com",
+            "blocked": False,
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.delete("/api/keys/tok_bob123", headers=AUTH)
+
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_with_ownership_check(app):
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "Old Name",
+            "user_id": "alice@example.com",
+            "blocked": False,
+        })
+    )
     respx.post(f"{LITELLM}/key/update").mock(
-        return_value=Response(200, json={"key": "sk-abc123", "key_alias": "New Name"})
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key": "sk-abc123fullkey",
+            "key_alias": "New Name",
+            "user_id": "alice@example.com",
+            "blocked": False,
+            "created_at": "2026-03-09T00:00:00Z",
+            "spend": 0,
+        })
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.patch(
-            "/api/keys/sk-abc123",
+            "/api/keys/tok_abc123",
             json={"key_alias": "New Name"},
             headers=AUTH,
         )
 
     assert r.status_code == 200
+    data = r.json()
+    # Must not leak full key
+    assert "key" not in data
+    assert data["name"] == "New Name"
+    assert "prefix" in data
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_denied_for_other_user(app):
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_bob123",
+            "token": "sk-bobkey",
+            "key_alias": "Bob Key",
+            "user_id": "bob@example.com",
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch(
+            "/api/keys/tok_bob123",
+            json={"key_alias": "Hacked"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_block_key_sanitizes_response(app):
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key": "sk-abc123fullkey",
+            "key_alias": "My Key",
+            "user_id": "alice@example.com",
+            "blocked": False,
+            "created_at": "2026-03-09T00:00:00Z",
+            "spend": 0,
+        })
+    )
+    respx.post(f"{LITELLM}/key/block").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key": "sk-abc123fullkey",
+            "key_alias": "My Key",
+            "user_id": "alice@example.com",
+            "blocked": True,
+            "created_at": "2026-03-09T00:00:00Z",
+            "spend": 0,
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys/tok_abc123/block", headers=AUTH)
+
+    assert r.status_code == 200
+    data = r.json()
+    # Must not leak full key
+    assert "key" not in data
+    assert data["is_active"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_block_key_denied_for_other_user(app):
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_bob123",
+            "token": "sk-bobkey",
+            "key_alias": "Bob Key",
+            "user_id": "bob@example.com",
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys/tok_bob123/block", headers=AUTH)
+
+    assert r.status_code == 404
 
 
 @pytest.mark.asyncio
