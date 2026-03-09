@@ -4,3 +4,6 @@ __pycache__/
 .env
 *.egg-info/
 dist/
+.pytest_cache/
+.playwright-mcp/
+screenshots/
