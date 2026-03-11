@@ -119,10 +119,10 @@ async def list_keys(
 async def key_info(key: str = "", authorization: str = Header()):
     check_admin(authorization)
 
-    record = keys_db.get(key)
-    if not record:
+    found = _find_key(key)
+    if not found:
         raise HTTPException(status_code=404, detail="Key not found")
-    return record
+    return keys_db[found]
 
 
 @app.post("/key/update")

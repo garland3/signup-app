@@ -1,20 +1,36 @@
 services:
   litellm-mock:
     build: .
-    command: ["python", "-m", "uvicorn", "mocks.litellm_mock:app", "--host", "0.0.0.0", "--port", "4000"]
+    container_name: litellm-mock
+    hostname: litellm-mock
+    command: ["python3.11", "-m", "uvicorn", "mocks.litellm_mock:app", "--host", "0.0.0.0", "--port", "4000"]
     ports:
       - "4000:4000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health')"]
+      test: ["CMD", "python3.11", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health')"]
       interval: 5s
       timeout: 3s
       retries: 5
 
   signup-app:
     build: .
+    container_name: signup-app
+    hostname: signup-app
     ports:
       - "8000:8000"
-    env_file: .env
+    environment:
+      DEBUG_MODE: "true"
+      LITELLM_BASE_URL: "http://litellm-mock:4000"
+      LITELLM_ADMIN_KEY: "sk-mock-admin-key"
+      AUTH_USER_HEADER: "X-User-Email"
+      TEST_USER: "test@test.com"
+      PROXY_SECRET: ""
+      FEATURE_PROXY_SECRET_ENABLED: "false"
     depends_on:
       litellm-mock:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3.11", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
