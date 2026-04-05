@@ -74,6 +74,20 @@ Unauthenticated users hit `GET /api/auth/login` to start the flow; the callback
 lands on `GET /api/auth/callback`, which sets a signed session cookie. Log out
 with `GET /api/auth/logout`. See `.env.example` for Google/GitHub examples.
 
+#### Running behind a TLS-terminating proxy (Kubernetes)
+
+By default the session cookie is marked `Secure` and only sent over HTTPS. If
+TLS is terminated upstream (e.g. a Kubernetes ingress or load balancer) and the
+app only sees plain HTTP traffic internally, set:
+
+```
+SESSION_COOKIE_SECURE=false
+```
+
+The cookie will still be signed and `HttpOnly`; the browser just won't require
+HTTPS on the hop between itself and your ingress. Make sure the external URL
+(the one users hit, and `OAUTH_REDIRECT_URL`) is still HTTPS.
+
 ## API Endpoints
 
 | Method | Path | Auth | Description |
