@@ -92,8 +92,8 @@ async def test_delete_key_with_ownership_check(app):
             "blocked": False,
         })
     )
-    respx.post(f"{LITELLM}/key/delete").mock(
-        return_value=Response(200, json={"deleted_keys": ["tok_abc123"]})
+    respx.post(f"{LITELLM}/key/update").mock(
+        return_value=Response(200, json={"token_id": "tok_abc123"})
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -283,3 +283,160 @@ async def test_litellm_error_returns_502(app):
         r = await c.get("/api/keys", headers=AUTH)
 
     assert r.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_get_config(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/config", headers=AUTH)
+    assert r.status_code == 200
+    data = r.json()
+    assert "app_name" in data
+    assert "required_metadata" in data
+    assert "max_active_keys" in data
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_soft_delete_calls_update_with_zero_duration(app):
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "My Key",
+            "user_id": "alice@example.com",
+            "blocked": False,
+            "metadata": {"duration": "30d", "project": "p1"},
+        })
+    )
+    update_route = respx.post(f"{LITELLM}/key/update").mock(
+        return_value=Response(200, json={"token_id": "tok_abc123"})
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.delete("/api/keys/tok_abc123", headers=AUTH)
+
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True}
+    assert update_route.called
+    import json
+    sent = json.loads(update_route.calls[0].request.content)
+    assert sent["duration"] == "0s"
+    assert sent["metadata"]["duration"] == "0s"
+    assert sent["metadata"]["project"] == "p1"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_rejected_when_required_metadata_missing(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.REQUIRED_KEY_METADATA
+    s.REQUIRED_KEY_METADATA = "project,task_number"
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/api/keys", json={"name": "X"}, headers=AUTH)
+        assert r.status_code == 400
+        assert "project" in r.json()["detail"]
+    finally:
+        s.REQUIRED_KEY_METADATA = original
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_with_metadata_stored(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.REQUIRED_KEY_METADATA
+    s.REQUIRED_KEY_METADATA = "project,task_number"
+
+    generate_route = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef",
+            "token_id": "tok_m",
+            "key_alias": "Meta Key",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+            "metadata": {"project": "phoenix", "task_number": "T-42"},
+        })
+    )
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/api/keys", json={
+                "name": "Meta Key",
+                "metadata": {"project": "phoenix", "task_number": "T-42"},
+            }, headers=AUTH)
+        assert r.status_code == 201
+        data = r.json()
+        assert data["metadata"]["project"] == "phoenix"
+        assert data["metadata"]["task_number"] == "T-42"
+        import json
+        sent = json.loads(generate_route.calls[0].request.content)
+        assert sent["metadata"]["project"] == "phoenix"
+    finally:
+        s.REQUIRED_KEY_METADATA = original
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_max_active_keys_enforced(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.MAX_ACTIVE_KEYS_PER_USER
+    s.MAX_ACTIVE_KEYS_PER_USER = 2
+
+    respx.get(f"{LITELLM}/key/list").mock(
+        return_value=Response(200, json=[
+            {"token_id": "t1", "token": "sk-1", "blocked": False, "user_id": "alice@example.com"},
+            {"token_id": "t2", "token": "sk-2", "blocked": False, "user_id": "alice@example.com"},
+        ])
+    )
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/api/keys", json={"name": "X"}, headers=AUTH)
+        assert r.status_code == 400
+        assert "limit" in r.json()["detail"].lower()
+    finally:
+        s.MAX_ACTIVE_KEYS_PER_USER = original
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_keys_sorts_active_first(app):
+    respx.get(f"{LITELLM}/key/list").mock(
+        return_value=Response(200, json=[
+            {"token_id": "t1", "token": "sk-1", "blocked": True, "user_id": "alice@example.com", "created_at": "2026-03-09T00:00:00Z"},
+            {"token_id": "t2", "token": "sk-2", "blocked": False, "user_id": "alice@example.com", "created_at": "2026-03-08T00:00:00Z"},
+            {"token_id": "t3", "token": "sk-3", "blocked": False, "user_id": "alice@example.com", "created_at": "2026-03-10T00:00:00Z"},
+        ])
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/keys", headers=AUTH)
+    assert r.status_code == 200
+    keys = r.json()
+    # Active keys first
+    assert keys[0]["is_active"] is True
+    assert keys[1]["is_active"] is True
+    assert keys[2]["is_active"] is False
+    # Among active, newest first
+    assert keys[0]["id"] == "t3"
+
+
+@pytest.mark.asyncio
+async def test_strip_user_domain():
+    from app.core.config import Settings
+    from app.core.middleware import AuthMiddleware
+    from fastapi import FastAPI, Request
+
+    s = Settings(DEBUG_MODE=False, STRIP_USER_DOMAIN=True)
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware, settings=s)
+
+    @app.get("/api/me")
+    async def me(request: Request):
+        return {"email": request.state.user_email}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/me", headers={"X-User-Email": "alice@corp.com"})
+    assert r.status_code == 200
+    assert r.json()["email"] == "alice"

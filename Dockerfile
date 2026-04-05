@@ -5,8 +5,10 @@ WORKDIR /app
 RUN dnf install -y python3.11 python3.11-pip python3.11-devel && \
     dnf clean all
 
+RUN python3.11 -m pip install --no-cache-dir uv
+
 COPY pyproject.toml .
-RUN python3.11 -m pip install --no-cache-dir .
+RUN uv pip install --system --no-cache .
 
 COPY app/ app/
 COPY mocks/ mocks/

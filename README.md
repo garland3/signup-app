@@ -13,14 +13,14 @@ API key management UI backed by LiteLLM proxy. Authenticated users can create, v
 
 ```bash
 # Start mock LiteLLM server
-python -m uvicorn mocks.litellm_mock:app --port 4000 &
+uv run uvicorn mocks.litellm_mock:app --port 4000 &
 
 # Setup
 cp .env.example .env
 # Set LITELLM_ADMIN_KEY=sk-mock-admin-key in .env
 
-pip install -e ".[dev]"
-python -m uvicorn app.main:app --reload --port 8000
+uv sync --extra dev
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 Open http://localhost:8000 to access the key management UI.
@@ -64,7 +64,7 @@ In **development**, set `DEBUG_MODE=true` to use the `TEST_USER` value.
 For development without a real LiteLLM instance, use the included mock:
 
 ```bash
-python -m uvicorn mocks.litellm_mock:app --port 4000
+uv run uvicorn mocks.litellm_mock:app --port 4000
 ```
 
 Admin key: `sk-mock-admin-key`
@@ -72,5 +72,5 @@ Admin key: `sk-mock-admin-key`
 ## Tests
 
 ```bash
-pytest tests/ -v
+uv run --extra dev pytest tests/ -v
 ```
