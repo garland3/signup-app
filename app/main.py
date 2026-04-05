@@ -1,9 +1,11 @@
+import hashlib
 from pathlib import Path
 
+import itsdangerous
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.sessions import SessionMiddleware as _SessionMiddleware
 
 from app.core.config import get_settings
 from app.core.middleware import AuthMiddleware
@@ -13,6 +15,22 @@ from app.routes.users import router as users_router
 from app.routes.keys import router as keys_router
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
+
+
+class FipsSafeSessionMiddleware(_SessionMiddleware):
+    """SessionMiddleware that signs cookies with HMAC-SHA256.
+
+    Starlette's default uses itsdangerous, which defaults to HMAC-SHA1.
+    SHA-1 is disabled in FIPS-enabled environments (e.g. RHEL/UBI base
+    images with system FIPS mode), so we override the signer to use
+    SHA-256.
+    """
+
+    def __init__(self, app, secret_key, **kwargs):
+        super().__init__(app, secret_key, **kwargs)
+        self.signer = itsdangerous.TimestampSigner(
+            str(secret_key), digest_method=hashlib.sha256
+        )
 
 
 def create_app() -> FastAPI:
@@ -30,7 +48,7 @@ def create_app() -> FastAPI:
                 "SESSION_SECRET must be set when AUTH_MODE=oauth"
             )
         app.add_middleware(
-            SessionMiddleware,
+            FipsSafeSessionMiddleware,
             secret_key=settings.SESSION_SECRET,
             session_cookie=settings.SESSION_COOKIE_NAME,
             max_age=settings.SESSION_MAX_AGE,
