@@ -1,8 +1,9 @@
 import hmac
+from urllib.parse import quote
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from app.core.config import Settings
 
@@ -25,19 +26,36 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in PUBLIC_PREFIXES):
             return await call_next(request)
 
-        # Skip non-API paths (serve frontend)
-        if not path.startswith("/api"):
-            return await call_next(request)
+        is_api = path.startswith("/api")
 
         if self.settings.AUTH_MODE == "oauth":
             user_email = self._resolve_oauth_user(request)
+            if not user_email:
+                # For browser navigation (non-API GETs), kick off the OAuth
+                # flow instead of returning a bare 401. API calls still get
+                # 401 so the JS client can detect and handle it.
+                if not is_api and request.method == "GET":
+                    next_url = request.url.path
+                    if request.url.query:
+                        next_url = f"{next_url}?{request.url.query}"
+                    return RedirectResponse(
+                        f"/api/auth/login?next={quote(next_url, safe='/?&=')}",
+                        status_code=302,
+                    )
+                return JSONResponse(
+                    {"detail": "Unauthorized"}, status_code=401
+                )
         else:
+            # Proxy mode only guards API routes; static pages pass through.
+            if not is_api:
+                return await call_next(request)
             user_email = self._resolve_proxy_user(request)
             if isinstance(user_email, JSONResponse):
                 return user_email
-
-        if not user_email:
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            if not user_email:
+                return JSONResponse(
+                    {"detail": "Unauthorized"}, status_code=401
+                )
 
         if self.settings.STRIP_USER_DOMAIN and "@" in user_email:
             user_email = user_email.split("@", 1)[0]
