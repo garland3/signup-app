@@ -17,9 +17,16 @@ body {
     padding: 0 20px;
 }
 
+.app-title {
+    text-align: center;
+    font-size: 32px;
+    font-weight: 700;
+    margin: 8px 0 16px;
+}
+
 header {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     margin-bottom: 24px;
 }

@@ -108,6 +108,7 @@ All configuration is via environment variables, loaded through Pydantic `BaseSet
 ```env
 # Core
 DEBUG_MODE=false
+APP_NAME=API Keys
 
 # LiteLLM Proxy
 LITELLM_BASE_URL=http://localhost:4000
@@ -119,13 +120,29 @@ TEST_USER=test@test.com
 PROXY_SECRET_HEADER=X-Proxy-Secret
 PROXY_SECRET=
 FEATURE_PROXY_SECRET_ENABLED=false
+# Strip @domain from authenticated username (alice@corp.com -> alice)
+STRIP_USER_DOMAIN=false
+
+# Key policy
+# Cap on active (non-expired, non-blocked) keys per user. Blank = no limit.
+MAX_ACTIVE_KEYS_PER_USER=
+# Comma-separated metadata fields required on each created key
+# (e.g. project,task_number). Values are stored on the key's metadata
+# and surfaced in the UI.
+REQUIRED_KEY_METADATA=
 ```
+
+Notes:
+- Deletion is a **soft delete**: the DELETE endpoint updates the key's
+  duration to `0s`, expiring it immediately rather than removing it from
+  LiteLLM.
+- The configured `APP_NAME` renders centered as the page's `<h1>`.
 
 ## Mock LiteLLM Server
 
 For development and testing, `mocks/litellm_mock.py` provides an in-memory implementation of the LiteLLM key management API. It stores keys in a dict and implements all the routes the app uses.
 
-Run it: `python -m uvicorn mocks.litellm_mock:app --port 4000`
+Run it: `uv run uvicorn mocks.litellm_mock:app --port 4000`
 
 Admin key for the mock: `sk-mock-admin-key`
 
@@ -134,11 +151,12 @@ Admin key for the mock: `sk-mock-admin-key`
 ### Quick Start
 ```bash
 # Start mock LiteLLM
-python -m uvicorn mocks.litellm_mock:app --port 4000 &
+uv run uvicorn mocks.litellm_mock:app --port 4000 &
 
 # Setup
 cp .env.example .env  # set LITELLM_ADMIN_KEY=sk-mock-admin-key
-python -m uvicorn app.main:app --reload --port 8000
+uv sync --extra dev
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 ### Docker
@@ -148,7 +166,7 @@ docker compose up --build
 
 ### Testing
 ```bash
-pytest tests/ -v
+uv run --extra dev pytest tests/ -v
 ```
 
 ## API Endpoints

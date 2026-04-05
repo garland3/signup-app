@@ -48,5 +48,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 {"detail": "Unauthorized"}, status_code=401
             )
 
+        if self.settings.STRIP_USER_DOMAIN and "@" in user_email:
+            user_email = user_email.split("@", 1)[0]
+
         request.state.user_email = user_email
         return await call_next(request)

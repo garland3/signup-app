@@ -18,6 +18,7 @@ class CreateKeyRequest(BaseModel):
     max_budget: float | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    metadata: dict[str, str] | None = None
 
 
 class UpdateKeyRequest(BaseModel):
@@ -27,6 +28,7 @@ class UpdateKeyRequest(BaseModel):
     rpm_limit: int | None = None
     tpm_limit: int | None = None
     duration: str | None = None
+    metadata: dict[str, str] | None = None
 
 
 def _mask_key(token: str) -> str:
@@ -42,6 +44,7 @@ def _format_key_response(key_data: dict, include_full_key: str | None = None) ->
     Never includes the full key unless include_full_key is explicitly passed
     (only at creation time).
     """
+    metadata = key_data.get("metadata") or {}
     data = {
         "id": key_data.get("token_id", key_data.get("token", "")),
         "name": key_data.get("key_alias") or key_data.get("key_name", ""),
@@ -50,17 +53,34 @@ def _format_key_response(key_data: dict, include_full_key: str | None = None) ->
         ),
         "created_at": key_data.get("created_at", ""),
         "expires": key_data.get("expires", ""),
-        "is_active": not key_data.get("blocked", False),
+        "duration": metadata.get("duration", "") if isinstance(metadata, dict) else "",
+        "is_active": not key_data.get("blocked", False)
+            and not _is_expired(key_data.get("expires")),
         "spend": key_data.get("spend", 0),
         "max_budget": key_data.get("max_budget"),
         "models": key_data.get("models", []),
         "rpm_limit": key_data.get("rpm_limit"),
         "tpm_limit": key_data.get("tpm_limit"),
         "user_id": key_data.get("user_id", ""),
+        "metadata": metadata if isinstance(metadata, dict) else {},
     }
     if include_full_key:
         data["key"] = include_full_key
     return data
+
+
+def _is_expired(expires: str | None) -> bool:
+    if not expires:
+        return False
+    try:
+        from datetime import datetime, timezone
+        s = expires.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt <= datetime.now(timezone.utc)
+    except Exception:
+        return False
 
 
 async def _verify_key_ownership(
@@ -86,12 +106,62 @@ async def _verify_key_ownership(
     return info
 
 
+@router.get("/config")
+async def get_config():
+    s = get_settings()
+    return {
+        "app_name": s.APP_NAME,
+        "required_metadata": s.required_metadata_fields,
+        "max_active_keys": s.MAX_ACTIVE_KEYS_PER_USER,
+    }
+
+
 @router.post("/keys", status_code=201)
 async def create_key(body: CreateKeyRequest, request: Request):
+    settings = get_settings()
     client = _get_client()
     user_email = request.state.user_email
 
-    kwargs = {"user_id": user_email, "key_alias": body.name}
+    # Validate required metadata fields
+    required = settings.required_metadata_fields
+    metadata = dict(body.metadata or {})
+    missing = [f for f in required if not str(metadata.get(f, "")).strip()]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required metadata: {', '.join(missing)}",
+        )
+
+    # Enforce max active keys per user
+    if settings.MAX_ACTIVE_KEYS_PER_USER is not None:
+        try:
+            existing = await client.list_keys(user_id=user_email)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        keys = existing if isinstance(existing, list) else existing.get("keys", [])
+        active_count = sum(
+            1 for k in keys
+            if not k.get("blocked", False) and not _is_expired(k.get("expires"))
+        )
+        if active_count >= settings.MAX_ACTIVE_KEYS_PER_USER:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Active key limit reached "
+                    f"({settings.MAX_ACTIVE_KEYS_PER_USER}). "
+                    "Delete an existing key first."
+                ),
+            )
+
+    # Persist duration in metadata so we can show it in the UI
+    if body.duration:
+        metadata["duration"] = body.duration
+
+    kwargs = {
+        "user_id": user_email,
+        "key_alias": body.name,
+        "metadata": metadata,
+    }
     if body.duration:
         kwargs["duration"] = body.duration
     if body.models:
@@ -109,6 +179,9 @@ async def create_key(body: CreateKeyRequest, request: Request):
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
     full_key = result.get("key", "")
+    # Ensure metadata surfaces in the response even if LiteLLM strips it
+    if "metadata" not in result:
+        result["metadata"] = metadata
     return _format_key_response(result, include_full_key=full_key)
 
 
@@ -123,7 +196,18 @@ async def list_keys(request: Request):
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
     keys = result if isinstance(result, list) else result.get("keys", [])
-    return [_format_key_response(k) for k in keys]
+    formatted = [_format_key_response(k) for k in keys]
+    # Active keys at top, then inactive; stable sort by created_at desc within
+    formatted.sort(
+        key=lambda k: (0 if k["is_active"] else 1, _neg_created(k["created_at"]))
+    )
+    return formatted
+
+
+def _neg_created(created: str) -> str:
+    # Reverse-sort by created_at by inverting a date string; simple fallback:
+    # newest first. Uses lexicographic sort on ISO-8601 strings.
+    return "".join(chr(255 - ord(c)) for c in (created or ""))
 
 
 @router.patch("/keys/{token}")
@@ -131,7 +215,7 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     client = _get_client()
     user_email = request.state.user_email
 
-    await _verify_key_ownership(client, token, user_email)
+    info = await _verify_key_ownership(client, token, user_email)
 
     kwargs = {}
     if body.key_alias is not None:
@@ -146,24 +230,45 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
         kwargs["tpm_limit"] = body.tpm_limit
     if body.duration is not None:
         kwargs["duration"] = body.duration
+        # Update metadata so we keep the duration visible in the UI
+        existing_meta = info.get("metadata") or {}
+        if not isinstance(existing_meta, dict):
+            existing_meta = {}
+        merged = {**existing_meta, **(body.metadata or {}), "duration": body.duration}
+        kwargs["metadata"] = merged
+    elif body.metadata is not None:
+        existing_meta = info.get("metadata") or {}
+        if not isinstance(existing_meta, dict):
+            existing_meta = {}
+        kwargs["metadata"] = {**existing_meta, **body.metadata}
 
     try:
         result = await client.update_key(key=token, **kwargs)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
+    if "metadata" not in result and "metadata" in kwargs:
+        result["metadata"] = kwargs["metadata"]
     return _format_key_response(result)
 
 
 @router.delete("/keys/{token}")
 async def delete_key(token: str, request: Request):
+    """Soft delete: set the key's duration to 0 so it expires immediately."""
     client = _get_client()
     user_email = request.state.user_email
 
-    await _verify_key_ownership(client, token, user_email)
+    info = await _verify_key_ownership(client, token, user_email)
+
+    existing_meta = info.get("metadata") or {}
+    if not isinstance(existing_meta, dict):
+        existing_meta = {}
+    merged_meta = {**existing_meta, "duration": "0s"}
 
     try:
-        result = await client.delete_key(keys=[token])
+        await client.update_key(
+            key=token, duration="0s", metadata=merged_meta
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
