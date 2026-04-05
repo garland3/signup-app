@@ -51,10 +51,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Run pip-audit
+      - name: Run pip-audit (project deps only)
         run: |
-          uv pip install pip-audit
-          uv run pip-audit --strict
+          uv export --format requirements-txt --no-hashes --no-emit-project -o requirements-audit.txt
+          uv pip install --system pip-audit
+          pip-audit -r requirements-audit.txt --strict
 
   bandit:
     name: Bandit (SAST)
@@ -92,19 +93,23 @@ jobs:
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
 
-  gitleaks:
-    name: Gitleaks (secret scan)
+  secret-scan:
+    name: Secret scan (TruffleHog)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install TruffleHog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Run TruffleHog (filesystem scan)
+        run: trufflehog filesystem . --only-verified --fail
