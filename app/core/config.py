@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     SESSION_COOKIE_NAME: str = "signup_session"
     # Max age of session cookie in seconds (default 7 days)
     SESSION_MAX_AGE: int = 60 * 60 * 24 * 7
+    # Require HTTPS for the session cookie. Set to false when running behind
+    # a TLS-terminating proxy/ingress (e.g. in Kubernetes) where the app
+    # itself only sees plain HTTP traffic.
+    SESSION_COOKIE_SECURE: bool = True
 
     # Key policy
     MAX_ACTIVE_KEYS_PER_USER: int | None = None

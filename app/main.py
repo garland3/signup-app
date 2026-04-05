@@ -35,7 +35,7 @@ def create_app() -> FastAPI:
             session_cookie=settings.SESSION_COOKIE_NAME,
             max_age=settings.SESSION_MAX_AGE,
             same_site="lax",
-            https_only=not settings.DEBUG_MODE,
+            https_only=settings.SESSION_COOKIE_SECURE and not settings.DEBUG_MODE,
         )
 
     app.include_router(health_router)
