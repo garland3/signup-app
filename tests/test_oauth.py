@@ -60,6 +60,22 @@ async def test_oauth_protected_route_without_session_returns_401():
 
 
 @pytest.mark.asyncio
+async def test_oauth_browser_page_redirects_to_login():
+    app = _make_app(_oauth_settings())
+
+    @app.get("/dashboard")
+    async def dashboard():
+        return {"ok": True}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.get("/dashboard", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/api/auth/login?next=/dashboard"
+
+
+@pytest.mark.asyncio
 async def test_oauth_login_redirects_to_provider():
     app = _make_app(_oauth_settings())
     async with AsyncClient(
