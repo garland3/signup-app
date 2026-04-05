@@ -44,9 +44,35 @@ The app holds a single admin key (`LITELLM_ADMIN_KEY`) to manage keys on behalf 
 
 ## Authentication
 
-In **production**, the app sits behind a reverse proxy that injects an `X-User-Email` header.
+Two modes, selected via `AUTH_MODE` in `.env`:
 
-In **development**, set `DEBUG_MODE=true` to use the `TEST_USER` value.
+### `AUTH_MODE=proxy` (default)
+
+The app sits behind a reverse proxy that injects an `X-User-Email` header. In
+development, set `DEBUG_MODE=true` to fall back to `TEST_USER`. Optionally set
+`FEATURE_PROXY_SECRET_ENABLED=true` + `PROXY_SECRET=...` to require a shared
+secret header from the proxy.
+
+### `AUTH_MODE=oauth`
+
+The app runs a standard OAuth 2.0 / OIDC authorization code flow. Configure:
+
+```
+AUTH_MODE=oauth
+OAUTH_CLIENT_ID=...
+OAUTH_CLIENT_SECRET=...
+OAUTH_AUTHORIZE_URL=...
+OAUTH_TOKEN_URL=...
+OAUTH_USERINFO_URL=...
+OAUTH_SCOPES=openid email profile
+OAUTH_REDIRECT_URL=http://localhost:8000/api/auth/callback
+OAUTH_EMAIL_FIELD=email
+SESSION_SECRET=<random secret>
+```
+
+Unauthenticated users hit `GET /api/auth/login` to start the flow; the callback
+lands on `GET /api/auth/callback`, which sets a signed session cookie. Log out
+with `GET /api/auth/logout`. See `.env.example` for Google/GitHub examples.
 
 ## API Endpoints
 
