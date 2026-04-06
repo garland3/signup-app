@@ -86,21 +86,29 @@ def _is_expired(expires: str | None) -> bool:
 def _normalize_key_alias(name: str, user_email: str) -> str:
     """Ensure key alias starts with exactly one '{user_email}-' prefix.
 
-    Handles STRIP_USER_DOMAIN mode where user_email may be just the username
-    (e.g. "alice") while the user-supplied name might contain the full email
-    prefix (e.g. "alice@corp.com-MyKey"). In that case the full-email prefix
-    is replaced with the canonical stripped prefix so we avoid double-prefixing.
+    Collapses repeated prefixes (e.g. "alice-alice-MyKey" → "alice-MyKey")
+    and handles STRIP_USER_DOMAIN mode where user_email may be just the
+    username (e.g. "alice") while the user-supplied name might contain the
+    full email prefix (e.g. "alice@corp-mail.com-MyKey"). In that case the
+    full-email prefix is replaced with the canonical stripped prefix so we
+    avoid double-prefixing.
     """
     prefix = f"{user_email}-"
-    if name.startswith(prefix):
-        return name
+    # Collapse any repeated canonical prefixes
+    while name.startswith(prefix):
+        name = name[len(prefix):]
     # When STRIP_USER_DOMAIN is active, user_email has no "@".
     # Detect and strip a full-email variant of the same username prefix.
-    if "@" not in user_email:
+    # The regex requires a TLD-like pattern (e.g. ".com") before the "-"
+    # separator so hyphens within domains (e.g. "corp-mail.com") aren't
+    # mistaken for the separator.
+    if "@" not in user_email and name.startswith(user_email + "@"):
         import re
-        match = re.match(re.escape(user_email) + r"@[^-]*-", name)
+        match = re.match(
+            re.escape(user_email) + r"@[^@]+\.[a-zA-Z]{2,}-", name
+        )
         if match:
-            return prefix + name[match.end():]
+            name = name[match.end():]
     return prefix + name
 
 

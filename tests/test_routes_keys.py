@@ -438,7 +438,7 @@ async def test_list_keys_sorts_active_first(app):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_create_key_forces_username_prefix(app):
+async def test_create_key_forces_user_email_prefix(app):
     """Key alias must always start with '{user_email}-' prefix."""
     mock_ensure_user()
     generate_route = respx.post(f"{LITELLM}/key/generate").mock(
