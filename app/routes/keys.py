@@ -153,6 +153,12 @@ async def create_key(body: CreateKeyRequest, request: Request):
                 ),
             )
 
+    # Ensure the user exists in LiteLLM before creating a key
+    try:
+        await client.ensure_user(user_email)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+
     # Persist duration in metadata so we can show it in the UI
     if body.duration:
         metadata["duration"] = body.duration

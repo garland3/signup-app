@@ -16,6 +16,44 @@ class LiteLLMClient:
             "Content-Type": "application/json",
         }
 
+    async def get_user(self, user_id: str) -> dict | None:
+        """GET /user/info?user_id=...  Returns None if the user doesn't exist."""
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{self.base_url}/user/info",
+                params={"user_id": user_id},
+                headers=self._headers(),
+            )
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+
+    async def create_user(self, user_id: str, **kwargs) -> dict:
+        """POST /user/new"""
+        body = {
+            "user_id": user_id,
+            "user_role": "internal_user",
+            "send_invite_email": False,
+            "auto_create_key": False,
+            **kwargs,
+        }
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{self.base_url}/user/new",
+                json=body,
+                headers=self._headers(),
+            )
+            r.raise_for_status()
+            return r.json()
+
+    async def ensure_user(self, user_id: str) -> dict:
+        """Get or create a LiteLLM user."""
+        existing = await self.get_user(user_id)
+        if existing is not None:
+            return existing
+        return await self.create_user(user_id)
+
     async def generate_key(
         self, user_id: str, key_alias: str, **kwargs
     ) -> dict:
