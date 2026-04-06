@@ -439,7 +439,7 @@ async def test_list_keys_sorts_active_first(app):
 @pytest.mark.asyncio
 @respx.mock
 async def test_create_key_forces_username_prefix(app):
-    """Key alias must always start with 'username-' prefix."""
+    """Key alias must always start with '{user_email}-' prefix."""
     mock_ensure_user()
     generate_route = respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={
@@ -463,7 +463,7 @@ async def test_create_key_forces_username_prefix(app):
 @pytest.mark.asyncio
 @respx.mock
 async def test_create_key_no_double_prefix(app):
-    """If user already includes the username prefix, don't double it."""
+    """If user already includes the user_email prefix, don't double it."""
     mock_ensure_user()
     generate_route = respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={
@@ -482,6 +482,86 @@ async def test_create_key_no_double_prefix(app):
     import json
     sent = json.loads(generate_route.calls[0].request.content)
     assert sent["key_alias"] == "alice@example.com-My Key"
+
+
+@pytest.fixture
+def strip_domain_app():
+    from tests.conftest import create_test_app
+    return create_test_app(strip_user_domain=True)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_no_double_prefix_strip_domain(strip_domain_app):
+    """With STRIP_USER_DOMAIN=True, a name starting with the full email prefix
+    should not be double-prefixed. E.g. 'alice@corp.com-MyKey' with
+    user_email='alice' should become 'alice-MyKey', not 'alice-alice@corp.com-MyKey'.
+    """
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(404, json={"detail": "User not found"})
+    )
+    respx.post(f"{LITELLM}/user/new").mock(
+        return_value=Response(200, json={"user_id": "alice"})
+    )
+    generate_route = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_strip",
+            "key_alias": "alice-My Key",
+            "user_id": "alice",
+            "created_at": "2026-03-09T00:00:00Z",
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=strip_domain_app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "alice@corp.com-My Key"},
+            headers={"X-User-Email": "alice@corp.com"},
+        )
+
+    assert r.status_code == 201
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["key_alias"] == "alice-My Key"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_enforces_prefix(app):
+    """PATCH endpoint must also enforce the '{user_email}-' prefix on key_alias."""
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "alice@example.com-Old Name",
+            "user_id": "alice@example.com",
+            "blocked": False,
+        })
+    )
+    update_route = respx.post(f"{LITELLM}/key/update").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "alice@example.com-New Name",
+            "user_id": "alice@example.com",
+            "blocked": False,
+            "created_at": "2026-03-09T00:00:00Z",
+            "spend": 0,
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch(
+            "/api/keys/tok_abc123",
+            json={"key_alias": "New Name"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 200
+    import json
+    sent = json.loads(update_route.calls[0].request.content)
+    assert sent["key_alias"] == "alice@example.com-New Name"
 
 
 @pytest.mark.asyncio

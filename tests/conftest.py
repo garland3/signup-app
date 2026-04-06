@@ -1,7 +1,7 @@
 from app.core.config import Settings
 
 
-def create_test_app():
+def create_test_app(*, strip_user_domain: bool = False):
     """Create a FastAPI app configured for testing."""
     from fastapi import FastAPI
     from app.core.middleware import AuthMiddleware
@@ -13,6 +13,7 @@ def create_test_app():
         DEBUG_MODE=False,
         LITELLM_BASE_URL="http://mock-litellm:4000",
         LITELLM_ADMIN_KEY="sk-test-admin-key",
+        STRIP_USER_DOMAIN=strip_user_domain,
     )
 
     # Patch get_settings to return test settings
