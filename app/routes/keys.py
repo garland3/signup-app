@@ -32,10 +32,12 @@ class UpdateKeyRequest(BaseModel):
 
 
 def _mask_key(token: str) -> str:
-    """Show first 8 chars + '...' for display."""
+    """Show first 6 chars + '...' + last 2 chars for display."""
     if not token:
         return ""
-    return token[:8] + "..." if len(token) > 8 else token
+    if len(token) <= 10:
+        return token
+    return token[:6] + "..." + token[-2:]
 
 
 def _format_key_response(key_data: dict, include_full_key: str | None = None) -> dict:

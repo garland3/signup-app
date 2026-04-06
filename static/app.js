@@ -46,12 +46,6 @@ function renderMetadataInputs() {
     });
 }
 
-function previewKeyName(name) {
-    if (!name) return "";
-    if (name.length <= 10) return name;
-    return name.slice(0, 5) + "..." + name.slice(-5);
-}
-
 function prettyLabel(field) {
     return field.replace(/_/g, " ").replace(/\b\w/g, function(c) { return c.toUpperCase(); });
 }
@@ -102,7 +96,8 @@ function renderKeys() {
         }).join("");
 
         return '<tr>' +
-            '<td><span class="key-prefix">' + escapeHtml(previewKeyName(k.name)) + '</span></td>' +
+            '<td>' + escapeHtml(k.name) + '</td>' +
+            '<td><span class="key-prefix">' + escapeHtml(k.prefix) + '</span></td>' +
             '<td>' + formatDate(k.created_at) + '</td>' +
             '<td>' + escapeHtml(duration) + '</td>' +
             '<td>' + spend + '</td>' +
