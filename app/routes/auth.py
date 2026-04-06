@@ -1,5 +1,6 @@
+import logging
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -7,7 +8,20 @@ from fastapi.responses import RedirectResponse
 
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth")
+
+
+def _is_safe_redirect(url: str) -> bool:
+    """Return True only for safe, relative redirect paths."""
+    # Decode percent-encoding to prevent %2F%2F bypasses
+    decoded = unquote(url)
+    # Must start with exactly one slash (reject // and \)
+    if not decoded.startswith("/") or decoded.startswith("//") or decoded.startswith("/\\"):
+        return False
+    parsed = urlparse(decoded)
+    return not parsed.netloc and not parsed.scheme
 
 
 def _require_oauth_configured():
@@ -40,8 +54,10 @@ async def login(request: Request):
     s = _require_oauth_configured()
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
-    # Optional post-login redirect target
+    # Optional post-login redirect target (validated to prevent open redirects)
     next_url = request.query_params.get("next", "/")
+    if not _is_safe_redirect(next_url):
+        next_url = "/"
     request.session["oauth_next"] = next_url
 
     params = {
@@ -91,9 +107,10 @@ async def callback(request: Request):
             headers={"Accept": "application/json"},
         )
         if token_resp.status_code >= 400:
+            logger.error("Token exchange failed: %s", token_resp.text)
             raise HTTPException(
                 status_code=502,
-                detail=f"Token exchange failed: {token_resp.text}",
+                detail="Token exchange failed",
             )
         tokens = token_resp.json()
         access_token = tokens.get("access_token")
@@ -108,9 +125,10 @@ async def callback(request: Request):
             headers={"Authorization": f"Bearer {access_token}"},
         )
         if ui_resp.status_code >= 400:
+            logger.error("Userinfo fetch failed: %s", ui_resp.text)
             raise HTTPException(
                 status_code=502,
-                detail=f"Userinfo fetch failed: {ui_resp.text}",
+                detail="Userinfo fetch failed",
             )
         userinfo = ui_resp.json()
 
@@ -123,8 +141,7 @@ async def callback(request: Request):
 
     request.session["user_email"] = email
     next_url = request.session.pop("oauth_next", "/") or "/"
-    # Only allow relative redirects
-    if not next_url.startswith("/"):
+    if not _is_safe_redirect(next_url):
         next_url = "/"
     return RedirectResponse(next_url, status_code=302)
 

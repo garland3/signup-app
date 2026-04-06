@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware as _SessionMiddleware
 
+from starlette.requests import Request
+
 from app.core.config import get_settings
 from app.core.middleware import AuthMiddleware
 from app.routes.auth import router as auth_router
@@ -55,6 +57,19 @@ def create_app() -> FastAPI:
             same_site="lax",
             https_only=settings.SESSION_COOKIE_SECURE and not settings.DEBUG_MODE,
         )
+
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if not settings.DEBUG_MODE:
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+        return response
 
     app.include_router(health_router)
     app.include_router(auth_router)
