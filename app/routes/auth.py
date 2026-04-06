@@ -1,9 +1,13 @@
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import get_settings
 
@@ -40,8 +44,11 @@ async def login(request: Request):
     s = _require_oauth_configured()
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
-    # Optional post-login redirect target
+    # Optional post-login redirect target (validated to prevent open redirects)
     next_url = request.query_params.get("next", "/")
+    parsed_next = urlparse(next_url)
+    if parsed_next.netloc or parsed_next.scheme or not next_url.startswith("/"):
+        next_url = "/"
     request.session["oauth_next"] = next_url
 
     params = {
@@ -91,9 +98,10 @@ async def callback(request: Request):
             headers={"Accept": "application/json"},
         )
         if token_resp.status_code >= 400:
+            logger.error("Token exchange failed: %s", token_resp.text)
             raise HTTPException(
                 status_code=502,
-                detail=f"Token exchange failed: {token_resp.text}",
+                detail="Token exchange failed",
             )
         tokens = token_resp.json()
         access_token = tokens.get("access_token")
@@ -108,9 +116,10 @@ async def callback(request: Request):
             headers={"Authorization": f"Bearer {access_token}"},
         )
         if ui_resp.status_code >= 400:
+            logger.error("Userinfo fetch failed: %s", ui_resp.text)
             raise HTTPException(
                 status_code=502,
-                detail=f"Userinfo fetch failed: {ui_resp.text}",
+                detail="Userinfo fetch failed",
             )
         userinfo = ui_resp.json()
 
@@ -123,8 +132,9 @@ async def callback(request: Request):
 
     request.session["user_email"] = email
     next_url = request.session.pop("oauth_next", "/") or "/"
-    # Only allow relative redirects
-    if not next_url.startswith("/"):
+    # Only allow safe relative redirects (block //host open redirects)
+    parsed = urlparse(next_url)
+    if parsed.netloc or parsed.scheme or not next_url.startswith("/"):
         next_url = "/"
     return RedirectResponse(next_url, status_code=302)
 
