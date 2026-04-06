@@ -83,6 +83,35 @@ def _is_expired(expires: str | None) -> bool:
         return False
 
 
+def _normalize_key_alias(name: str, user_email: str) -> str:
+    """Ensure key alias starts with exactly one '{user_email}-' prefix.
+
+    Collapses repeated prefixes (e.g. "alice-alice-MyKey" → "alice-MyKey")
+    and handles STRIP_USER_DOMAIN mode where user_email may be just the
+    username (e.g. "alice") while the user-supplied name might contain the
+    full email prefix (e.g. "alice@corp-mail.com-MyKey"). In that case the
+    full-email prefix is replaced with the canonical stripped prefix so we
+    avoid double-prefixing.
+    """
+    prefix = f"{user_email}-"
+    # Collapse any repeated canonical prefixes
+    while name.startswith(prefix):
+        name = name[len(prefix):]
+    # When STRIP_USER_DOMAIN is active, user_email has no "@".
+    # Detect and strip a full-email variant of the same username prefix.
+    # The regex requires a TLD-like pattern (e.g. ".com") before the "-"
+    # separator so hyphens within domains (e.g. "corp-mail.com") aren't
+    # mistaken for the separator.
+    if "@" not in user_email and name.startswith(user_email + "@"):
+        import re
+        match = re.match(
+            re.escape(user_email) + r"@[^@]+\.[a-zA-Z]{2,}-", name
+        )
+        if match:
+            name = name[match.end():]
+    return prefix + name
+
+
 async def _verify_key_ownership(
     client: LiteLLMClient, token: str, user_email: str
 ) -> dict:
@@ -163,9 +192,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
     if body.duration:
         metadata["duration"] = body.duration
 
-    # Force key alias to always start with "username-" prefix
-    prefix = f"{user_email}-"
-    key_name = body.name if body.name.startswith(prefix) else f"{prefix}{body.name}"
+    # Force key alias to always start with "{user_email}-" prefix
+    key_name = _normalize_key_alias(body.name, user_email)
 
     kwargs = {
         "user_id": user_email,
@@ -229,7 +257,7 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
 
     kwargs = {}
     if body.key_alias is not None:
-        kwargs["key_alias"] = body.key_alias
+        kwargs["key_alias"] = _normalize_key_alias(body.key_alias, user_email)
     if body.models is not None:
         kwargs["models"] = body.models
     if body.max_budget is not None:
