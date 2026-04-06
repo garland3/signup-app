@@ -7,9 +7,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware as _SessionMiddleware
 
-from app.core.config import get_settings
 from starlette.requests import Request
 
+from app.core.config import get_settings
 from app.core.middleware import AuthMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.health import router as health_router

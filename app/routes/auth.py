@@ -1,17 +1,27 @@
+import logging
 import secrets
-from urllib.parse import urlencode, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 
 import httpx
-import logging
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-logger = logging.getLogger(__name__)
-
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth")
+
+
+def _is_safe_redirect(url: str) -> bool:
+    """Return True only for safe, relative redirect paths."""
+    # Decode percent-encoding to prevent %2F%2F bypasses
+    decoded = unquote(url)
+    # Must start with exactly one slash (reject // and \)
+    if not decoded.startswith("/") or decoded.startswith("//") or decoded.startswith("/\\"):
+        return False
+    parsed = urlparse(decoded)
+    return not parsed.netloc and not parsed.scheme
 
 
 def _require_oauth_configured():
@@ -46,8 +56,7 @@ async def login(request: Request):
     request.session["oauth_state"] = state
     # Optional post-login redirect target (validated to prevent open redirects)
     next_url = request.query_params.get("next", "/")
-    parsed_next = urlparse(next_url)
-    if parsed_next.netloc or parsed_next.scheme or not next_url.startswith("/"):
+    if not _is_safe_redirect(next_url):
         next_url = "/"
     request.session["oauth_next"] = next_url
 
@@ -132,9 +141,7 @@ async def callback(request: Request):
 
     request.session["user_email"] = email
     next_url = request.session.pop("oauth_next", "/") or "/"
-    # Only allow safe relative redirects (block //host open redirects)
-    parsed = urlparse(next_url)
-    if parsed.netloc or parsed.scheme or not next_url.startswith("/"):
+    if not _is_safe_redirect(next_url):
         next_url = "/"
     return RedirectResponse(next_url, status_code=302)
 
