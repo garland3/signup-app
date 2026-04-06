@@ -6,6 +6,16 @@ AUTH = {"X-User-Email": "alice@example.com"}
 LITELLM = "http://mock-litellm:4000"
 
 
+def mock_ensure_user():
+    """Mock the GET /user/info + POST /user/new calls used by ensure_user."""
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(404, json={"detail": "User not found"})
+    )
+    respx.post(f"{LITELLM}/user/new").mock(
+        return_value=Response(200, json={"user_id": "alice@example.com"})
+    )
+
+
 @pytest.fixture
 def app():
     from tests.conftest import create_test_app
@@ -15,6 +25,7 @@ def app():
 @pytest.mark.asyncio
 @respx.mock
 async def test_create_key(app):
+    mock_ensure_user()
     respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
@@ -244,6 +255,7 @@ async def test_block_key_denied_for_other_user(app):
 @pytest.mark.asyncio
 @respx.mock
 async def test_create_key_with_options(app):
+    mock_ensure_user()
     respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
@@ -350,6 +362,7 @@ async def test_create_key_with_metadata_stored(app):
     original = s.REQUIRED_KEY_METADATA
     s.REQUIRED_KEY_METADATA = "project,task_number"
 
+    mock_ensure_user()
     generate_route = respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef",
@@ -385,6 +398,7 @@ async def test_max_active_keys_enforced(app):
     original = s.MAX_ACTIVE_KEYS_PER_USER
     s.MAX_ACTIVE_KEYS_PER_USER = 2
 
+    mock_ensure_user()
     respx.get(f"{LITELLM}/key/list").mock(
         return_value=Response(200, json=[
             {"token_id": "t1", "token": "sk-1", "blocked": False, "user_id": "alice@example.com"},

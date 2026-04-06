@@ -22,8 +22,9 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Mock LiteLLM Proxy")
 
-# In-memory key store
+# In-memory stores
 keys_db: dict[str, dict] = {}
+users_db: dict[str, dict] = {}
 
 ADMIN_KEY = "sk-mock-admin-key"
 
@@ -62,6 +63,42 @@ class DeleteKeyRequest(BaseModel):
 
 class BlockKeyRequest(BaseModel):
     key: str
+
+
+class NewUserRequest(BaseModel):
+    user_id: str
+    user_role: str = "internal_user"
+    send_invite_email: bool = False
+    auto_create_key: bool = False
+    metadata: dict = {}
+    user_email: str = ""
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
+
+
+@app.post("/user/new")
+async def create_user(body: NewUserRequest, authorization: str = Header()):
+    check_admin(authorization)
+    now = datetime.now(timezone.utc).isoformat()
+    user = {
+        "user_id": body.user_id,
+        "user_role": body.user_role,
+        "user_email": body.user_email,
+        "metadata": body.metadata,
+        "rpm_limit": body.rpm_limit,
+        "tpm_limit": body.tpm_limit,
+        "created_at": now,
+    }
+    users_db[body.user_id] = user
+    return user
+
+
+@app.get("/user/info")
+async def get_user(user_id: str = "", authorization: str = Header()):
+    check_admin(authorization)
+    if user_id not in users_db:
+        raise HTTPException(status_code=404, detail="User not found")
+    return users_db[user_id]
 
 
 @app.post("/key/generate")
