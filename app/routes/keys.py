@@ -50,9 +50,8 @@ def _format_key_response(key_data: dict, include_full_key: str | None = None) ->
     data = {
         "id": key_data.get("token_id", key_data.get("token", "")),
         "name": key_data.get("key_alias") or key_data.get("key_name", ""),
-        "prefix": _mask_key(
-            key_data.get("token", key_data.get("key", ""))
-        ),
+        "prefix": (metadata.get("key_preview") if isinstance(metadata, dict) else "")
+            or _mask_key(key_data.get("token", key_data.get("key", ""))),
         "created_at": key_data.get("created_at", ""),
         "expires": key_data.get("expires", ""),
         "duration": metadata.get("duration", "") if isinstance(metadata, dict) else "",
@@ -219,9 +218,19 @@ async def create_key(body: CreateKeyRequest, request: Request):
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
     full_key = result.get("key", "")
+    # Store a key preview in metadata so it survives list calls
+    if full_key:
+        metadata["key_preview"] = _mask_key(full_key)
+        kwargs["metadata"] = metadata
+        try:
+            await client.update_key(key=full_key, metadata=metadata)
+        except Exception:
+            pass  # best-effort; preview will still be in the creation response
     # Ensure metadata surfaces in the response even if LiteLLM strips it
     if "metadata" not in result:
         result["metadata"] = metadata
+    else:
+        result["metadata"]["key_preview"] = metadata.get("key_preview", "")
     return _format_key_response(result, include_full_key=full_key)
 
 
