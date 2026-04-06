@@ -163,9 +163,13 @@ async def create_key(body: CreateKeyRequest, request: Request):
     if body.duration:
         metadata["duration"] = body.duration
 
+    # Force key alias to always start with "username-" prefix
+    prefix = f"{user_email}-"
+    key_name = body.name if body.name.startswith(prefix) else f"{prefix}{body.name}"
+
     kwargs = {
         "user_id": user_email,
-        "key_alias": body.name,
+        "key_alias": key_name,
         "metadata": metadata,
     }
     if body.duration:

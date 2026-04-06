@@ -437,6 +437,54 @@ async def test_list_keys_sorts_active_first(app):
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_create_key_forces_username_prefix(app):
+    """Key alias must always start with 'username-' prefix."""
+    mock_ensure_user()
+    generate_route = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_prefix",
+            "key_alias": "alice@example.com-My Key",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "My Key"}, headers=AUTH)
+
+    assert r.status_code == 201
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["key_alias"] == "alice@example.com-My Key"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_no_double_prefix(app):
+    """If user already includes the username prefix, don't double it."""
+    mock_ensure_user()
+    generate_route = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_prefix2",
+            "key_alias": "alice@example.com-My Key",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "alice@example.com-My Key"}, headers=AUTH)
+
+    assert r.status_code == 201
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["key_alias"] == "alice@example.com-My Key"
+
+
+@pytest.mark.asyncio
 async def test_strip_user_domain():
     from app.core.config import Settings
     from app.core.middleware import AuthMiddleware
