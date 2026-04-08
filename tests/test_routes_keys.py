@@ -103,15 +103,25 @@ async def test_delete_key_with_ownership_check(app):
             "blocked": False,
         })
     )
-    respx.post(f"{LITELLM}/key/update").mock(
-        return_value=Response(200, json={"token_id": "tok_abc123"})
+    block_route = respx.post(f"{LITELLM}/key/block").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "Alice Key",
+            "user_id": "alice@example.com",
+            "blocked": True,
+            "created_at": "2026-03-09T00:00:00Z",
+            "spend": 0,
+        })
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.delete("/api/keys/tok_abc123", headers=AUTH)
 
     assert r.status_code == 200
-    assert r.json() == {"deleted": True}
+    data = r.json()
+    assert data["is_active"] is False
+    assert block_route.called
 
 
 @pytest.mark.asyncio
@@ -310,7 +320,8 @@ async def test_get_config(app):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_soft_delete_calls_update_with_zero_duration(app):
+async def test_soft_delete_calls_block(app):
+    """DELETE endpoint uses /key/block for soft delete (not duration=0s)."""
     respx.get(f"{LITELLM}/key/info").mock(
         return_value=Response(200, json={
             "token_id": "tok_abc123",
@@ -321,21 +332,29 @@ async def test_soft_delete_calls_update_with_zero_duration(app):
             "metadata": {"duration": "30d", "project": "p1"},
         })
     )
-    update_route = respx.post(f"{LITELLM}/key/update").mock(
-        return_value=Response(200, json={"token_id": "tok_abc123"})
+    block_route = respx.post(f"{LITELLM}/key/block").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "My Key",
+            "user_id": "alice@example.com",
+            "blocked": True,
+            "created_at": "2026-03-09T00:00:00Z",
+            "spend": 0,
+            "metadata": {"duration": "30d", "project": "p1"},
+        })
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.delete("/api/keys/tok_abc123", headers=AUTH)
 
     assert r.status_code == 200
-    assert r.json() == {"deleted": True}
-    assert update_route.called
+    data = r.json()
+    assert data["is_active"] is False
+    assert block_route.called
     import json
-    sent = json.loads(update_route.calls[0].request.content)
-    assert sent["duration"] == "0s"
-    assert sent["metadata"]["duration"] == "0s"
-    assert sent["metadata"]["project"] == "p1"
+    sent = json.loads(block_route.calls[0].request.content)
+    assert sent["key"] == "tok_abc123"
 
 
 @pytest.mark.asyncio

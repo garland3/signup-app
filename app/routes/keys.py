@@ -292,25 +292,18 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
 
 @router.delete("/keys/{token}")
 async def delete_key(token: str, request: Request):
-    """Soft delete: set the key's duration to 0 so it expires immediately."""
+    """Soft delete: block the key via LiteLLM so it can be unblocked later."""
     client = _get_client()
     user_email = request.state.user_email
 
-    info = await _verify_key_ownership(client, token, user_email)
-
-    existing_meta = info.get("metadata") or {}
-    if not isinstance(existing_meta, dict):
-        existing_meta = {}
-    merged_meta = {**existing_meta, "duration": "0s"}
+    await _verify_key_ownership(client, token, user_email)
 
     try:
-        await client.update_key(
-            key=token, duration="0s", metadata=merged_meta
-        )
+        result = await client.block_key(key=token)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
 
-    return {"deleted": True}
+    return _format_key_response(result)
 
 
 @router.post("/keys/{token}/block")

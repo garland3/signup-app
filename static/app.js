@@ -87,8 +87,8 @@ function renderKeys() {
         var spend = k.spend != null ? "$" + Number(k.spend).toFixed(2) : "-";
         var duration = k.duration || "-";
         var actions = k.is_active
-            ? '<button class="danger" onclick="deleteKey(\'' + escapeAttr(k.id) + '\')">Delete</button>'
-            : '';
+            ? '<button class="danger" onclick="revokeKey(\'' + escapeAttr(k.id) + '\')">Revoke</button>'
+            : '<button onclick="reactivateKey(\'' + escapeAttr(k.id) + '\')">Reactivate</button>';
 
         var metaCells = metaFields.map(function(f) {
             var v = (k.metadata && k.metadata[f]) ? k.metadata[f] : "-";
@@ -184,9 +184,15 @@ async function copyKey() {
     await navigator.clipboard.writeText(key);
 }
 
-async function deleteKey(token) {
-    if (!confirm("Delete this API key? The key will be expired immediately.")) return;
+async function revokeKey(token) {
+    if (!confirm("Revoke this API key? It will be blocked immediately but can be reactivated later.")) return;
     var r = await fetch("/api/keys/" + encodeURIComponent(token), {method: "DELETE"});
+    if (r.ok) await loadKeys();
+}
+
+async function reactivateKey(token) {
+    if (!confirm("Reactivate this API key?")) return;
+    var r = await fetch("/api/keys/" + encodeURIComponent(token) + "/unblock", {method: "POST"});
     if (r.ok) await loadKeys();
 }
 

@@ -133,9 +133,9 @@ REQUIRED_KEY_METADATA=
 ```
 
 Notes:
-- Deletion is a **soft delete**: the DELETE endpoint updates the key's
-  duration to `0s`, expiring it immediately rather than removing it from
-  LiteLLM.
+- Deletion is a **soft delete**: the DELETE endpoint calls LiteLLM's
+  `/key/block` to block the key. Blocked keys can be reactivated via
+  the `/api/keys/{token}/unblock` endpoint.
 - The configured `APP_NAME` renders centered as the page's `<h1>`.
 
 ## Mock LiteLLM Server
@@ -179,7 +179,7 @@ uv run --extra dev pytest tests/ -v
 - `GET /api/keys` -- list user's API keys (masked)
 - `POST /api/keys` -- create new key (returns full key once)
 - `PATCH /api/keys/{token}` -- update key settings
-- `DELETE /api/keys/{token}` -- delete key permanently
+- `DELETE /api/keys/{token}` -- revoke key (soft delete via block)
 - `POST /api/keys/{token}/block` -- block a key
 - `POST /api/keys/{token}/unblock` -- unblock a key
 
