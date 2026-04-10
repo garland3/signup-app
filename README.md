@@ -88,6 +88,21 @@ The cookie will still be signed and `HttpOnly`; the browser just won't require
 HTTPS on the hop between itself and your ingress. Make sure the external URL
 (the one users hit, and `OAUTH_REDIRECT_URL`) is still HTTPS.
 
+## Running under a URL path prefix
+
+If the app sits behind a reverse proxy that maps a sub-path (for example
+`https://mydomain.com/start` -> this container), set `ROOT_PATH` in the
+environment:
+
+```
+ROOT_PATH=/start
+```
+
+All routes, static assets, and OAuth redirects are then served beneath the
+prefix. Visiting the container root (`/`) issues a 307 redirect to the
+prefix. When using OAuth, make sure `OAUTH_REDIRECT_URL` also includes the
+prefix (e.g. `https://mydomain.com/start/api/auth/callback`).
+
 ## API Endpoints
 
 | Method | Path | Auth | Description |

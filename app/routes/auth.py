@@ -52,12 +52,13 @@ def _require_oauth_configured():
 @router.get("/login")
 async def login(request: Request):
     s = _require_oauth_configured()
+    default_next = s.normalized_root_path + "/"
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
     # Optional post-login redirect target (validated to prevent open redirects)
-    next_url = request.query_params.get("next", "/")
+    next_url = request.query_params.get("next", default_next)
     if not _is_safe_redirect(next_url):
-        next_url = "/"
+        next_url = default_next
     request.session["oauth_next"] = next_url
 
     params = {
@@ -140,9 +141,10 @@ async def callback(request: Request):
         )
 
     request.session["user_email"] = email
-    next_url = request.session.pop("oauth_next", "/") or "/"
+    default_next = s.normalized_root_path + "/"
+    next_url = request.session.pop("oauth_next", default_next) or default_next
     if not _is_safe_redirect(next_url):
-        next_url = "/"
+        next_url = default_next
     return RedirectResponse(next_url, status_code=302)
 
 
@@ -150,4 +152,6 @@ async def callback(request: Request):
 @router.get("/logout")
 async def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse(
+        get_settings().normalized_root_path + "/", status_code=302
+    )

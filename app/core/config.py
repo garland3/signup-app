@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     # Core
     DEBUG_MODE: bool = False
     APP_NAME: str = "API Keys"
+    # Optional URL path prefix the app is served under (e.g. "/start").
+    # When set, all routes, static assets, and auth redirects are served
+    # beneath this prefix. Leave blank to serve from the site root.
+    ROOT_PATH: str = ""
 
     # LiteLLM proxy connection
     LITELLM_BASE_URL: str = "http://localhost:4000"
@@ -65,6 +69,16 @@ class Settings(BaseSettings):
     @property
     def oauth_scope_list(self) -> list[str]:
         return [s for s in self.OAUTH_SCOPES.split() if s]
+
+    @property
+    def normalized_root_path(self) -> str:
+        """Return ROOT_PATH normalized to either "" or "/prefix" (no trailing slash)."""
+        p = (self.ROOT_PATH or "").strip()
+        if not p:
+            return ""
+        if not p.startswith("/"):
+            p = "/" + p
+        return p.rstrip("/") or ""
 
 
 settings: Settings | None = None
