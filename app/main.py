@@ -3,7 +3,7 @@ from pathlib import Path
 
 import itsdangerous
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware as _SessionMiddleware
 
@@ -35,8 +35,12 @@ class FipsSafeSessionMiddleware(_SessionMiddleware):
         )
 
 
-def create_app() -> FastAPI:
+def create_app():
     settings = get_settings()
+    root_path = settings.normalized_root_path
+    # Intentionally do NOT pass root_path= to FastAPI: we prefix routes
+    # explicitly instead, which keeps path matching and URL generation
+    # consistent regardless of whether a reverse proxy strips the prefix.
     app = FastAPI(title="Signup App")
     app.state.settings = settings
 
@@ -71,17 +75,32 @@ def create_app() -> FastAPI:
             )
         return response
 
-    app.include_router(health_router)
-    app.include_router(auth_router)
-    app.include_router(users_router)
-    app.include_router(keys_router)
+    app.include_router(health_router, prefix=root_path)
+    app.include_router(auth_router, prefix=root_path)
+    app.include_router(users_router, prefix=root_path)
+    app.include_router(keys_router, prefix=root_path)
 
     if STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)))
+        app.mount(
+            f"{root_path}/static", StaticFiles(directory=str(STATIC_DIR))
+        )
 
-        @app.get("/")
+        # Render index.html with the configured root path substituted so
+        # asset URLs and the frontend API base path are prefix-aware.
+        index_html = (STATIC_DIR / "index.html").read_text().replace(
+            "{{ROOT_PATH}}", root_path
+        )
+
+        @app.get(f"{root_path}/")
         async def serve_frontend():
-            return FileResponse(STATIC_DIR / "index.html")
+            return HTMLResponse(index_html)
+
+        if root_path:
+            # Direct visits to the container root redirect to the prefix
+            # so users who browse to the bare host still land in the app.
+            @app.get("/")
+            async def root_redirect():
+                return RedirectResponse(f"{root_path}/", status_code=307)
 
     return app
 

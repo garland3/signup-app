@@ -1,8 +1,9 @@
 var currentKeys = [];
 var appConfig = {app_name: "API Keys", required_metadata: [], max_active_keys: null};
+var API_BASE = (window.APP_ROOT_PATH || "") + "/api";
 
 async function loadConfig() {
-    var r = await fetch("/api/config");
+    var r = await fetch(API_BASE + "/config");
     if (!r.ok) return;
     appConfig = await r.json();
     var title = appConfig.app_name || "API Keys";
@@ -51,7 +52,7 @@ function prettyLabel(field) {
 }
 
 async function loadUser() {
-    var r = await fetch("/api/me");
+    var r = await fetch(API_BASE + "/me");
     if (r.ok) {
         var data = await r.json();
         document.getElementById("user-email").textContent = data.email;
@@ -59,7 +60,7 @@ async function loadUser() {
 }
 
 async function loadKeys() {
-    var r = await fetch("/api/keys");
+    var r = await fetch(API_BASE + "/keys");
     if (!r.ok) return;
     currentKeys = await r.json();
     renderKeys();
@@ -153,7 +154,7 @@ async function createKey() {
     }
     if (Object.keys(metadata).length > 0) body.metadata = metadata;
 
-    var r = await fetch("/api/keys", {
+    var r = await fetch(API_BASE + "/keys", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(body),
@@ -186,7 +187,7 @@ async function copyKey() {
 
 async function deleteKey(token) {
     if (!confirm("Delete this API key? The key will be expired immediately.")) return;
-    var r = await fetch("/api/keys/" + encodeURIComponent(token), {method: "DELETE"});
+    var r = await fetch(API_BASE + "/keys/" + encodeURIComponent(token), {method: "DELETE"});
     if (r.ok) await loadKeys();
 }
 

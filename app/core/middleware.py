@@ -17,7 +17,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.settings = settings
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        full_path = request.url.path
+
+        # Strip the configured URL prefix (if any) so path-based policy
+        # checks can operate on the app-relative path.
+        root_path = self.settings.normalized_root_path
+        if root_path and full_path.startswith(root_path):
+            path = full_path[len(root_path):] or "/"
+        else:
+            path = full_path
 
         # Allow public paths
         if path in PUBLIC_PATHS or path.startswith("/static"):
@@ -35,11 +43,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 # flow instead of returning a bare 401. API calls still get
                 # 401 so the JS client can detect and handle it.
                 if not is_api and request.method == "GET":
-                    next_url = request.url.path
+                    next_url = full_path
                     if request.url.query:
                         next_url = f"{next_url}?{request.url.query}"
                     return RedirectResponse(
-                        f"/api/auth/login?next={quote(next_url, safe='/?&=')}",
+                        f"{root_path}/api/auth/login?next={quote(next_url, safe='/?&=')}",
                         status_code=302,
                     )
                 return JSONResponse(
