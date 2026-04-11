@@ -27,8 +27,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         else:
             path = full_path
 
-        # Allow public paths
-        if path in PUBLIC_PATHS or path.startswith("/static"):
+        # Allow public paths. The health endpoint always bypasses
+        # authentication so liveness/readiness probes work without
+        # credentials. Normalize a trailing slash so /api/health and
+        # /api/health/ are both treated as public.
+        normalized = path.rstrip("/") or "/"
+        if (
+            path in PUBLIC_PATHS
+            or normalized in PUBLIC_PATHS
+            or path.startswith("/static")
+        ):
             return await call_next(request)
 
         if any(path.startswith(p) for p in PUBLIC_PREFIXES):
