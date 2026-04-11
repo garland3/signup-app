@@ -26,6 +26,9 @@ services:
       TEST_USER: "test@test.com"
       PROXY_SECRET: ""
       FEATURE_PROXY_SECRET_ENABLED: "false"
+      # Dev compose only: allow the test-user fallback. Never enable in prod.
+      ALLOW_TEST_USER: "true"
+      ALLOW_INSECURE_STARTUP: "true"
     depends_on:
       litellm-mock:
         condition: service_healthy

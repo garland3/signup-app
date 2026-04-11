@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="app-root-path" content="{{ROOT_PATH}}">
     <title>API Keys</title>
     <link rel="stylesheet" href="{{ROOT_PATH}}/static/style.css">
-    <script>window.APP_ROOT_PATH = "{{ROOT_PATH}}";</script>
 </head>
 <body>
     <div class="container">
@@ -16,7 +16,7 @@
         </header>
 
         <div class="actions">
-            <button id="create-btn" onclick="showCreateModal()">Create new key</button>
+            <button id="create-btn">Create new key</button>
         </div>
 
         <table id="keys-table">
@@ -49,8 +49,8 @@
             <input type="number" id="key-budget" placeholder="e.g. 100" step="0.01">
             <div id="required-metadata-fields"></div>
             <div class="modal-actions">
-                <button onclick="hideCreateModal()">Cancel</button>
-                <button class="primary" onclick="createKey()">Create</button>
+                <button id="create-cancel-btn">Cancel</button>
+                <button id="create-submit-btn" class="primary">Create</button>
             </div>
         </div>
     </div>
@@ -62,10 +62,10 @@
             <p class="warning">Copy this key now. You will not be able to see it again.</p>
             <div class="key-display">
                 <code id="full-key"></code>
-                <button onclick="copyKey()">Copy</button>
+                <button id="copy-key-btn">Copy</button>
             </div>
             <div class="modal-actions">
-                <button class="primary" onclick="hideShowKeyModal()">Done</button>
+                <button id="show-key-done-btn" class="primary">Done</button>
             </div>
         </div>
     </div>

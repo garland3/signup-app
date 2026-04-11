@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+from app.core.audit import audit
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ async def callback(request: Request):
 
     error = request.query_params.get("error")
     if error:
+        audit("oauth_callback_error", error=error)
         raise HTTPException(
             status_code=400,
             detail=f"OAuth error: {error} - "
@@ -92,45 +94,53 @@ async def callback(request: Request):
 
     expected_state = request.session.pop("oauth_state", None)
     if not expected_state or not secrets.compare_digest(state, expected_state):
+        audit("oauth_state_mismatch")
         raise HTTPException(status_code=400, detail="Invalid state")
 
     # Exchange code for access token
     async with httpx.AsyncClient(timeout=10.0) as http:
-        token_resp = await http.post(
-            s.OAUTH_TOKEN_URL,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": s.OAUTH_REDIRECT_URL,
-                "client_id": s.OAUTH_CLIENT_ID,
-                "client_secret": s.OAUTH_CLIENT_SECRET,
-            },
-            headers={"Accept": "application/json"},
-        )
+        try:
+            token_resp = await http.post(
+                s.OAUTH_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": s.OAUTH_REDIRECT_URL,
+                    "client_id": s.OAUTH_CLIENT_ID,
+                    "client_secret": s.OAUTH_CLIENT_SECRET,
+                },
+                headers={"Accept": "application/json"},
+            )
+        except httpx.RequestError as e:
+            logger.exception("Token exchange transport error")
+            audit("oauth_token_exchange_error", reason="transport")
+            raise HTTPException(status_code=502, detail="Token exchange failed")
         if token_resp.status_code >= 400:
             logger.error("Token exchange failed: %s", token_resp.text)
-            raise HTTPException(
-                status_code=502,
-                detail="Token exchange failed",
-            )
+            audit("oauth_token_exchange_error", status=token_resp.status_code)
+            raise HTTPException(status_code=502, detail="Token exchange failed")
         tokens = token_resp.json()
         access_token = tokens.get("access_token")
         if not access_token:
+            audit("oauth_token_exchange_error", reason="no_access_token")
             raise HTTPException(
                 status_code=502, detail="No access_token in token response"
             )
 
         # Fetch userinfo
-        ui_resp = await http.get(
-            s.OAUTH_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
+        try:
+            ui_resp = await http.get(
+                s.OAUTH_USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        except httpx.RequestError:
+            logger.exception("Userinfo fetch transport error")
+            audit("oauth_userinfo_error", reason="transport")
+            raise HTTPException(status_code=502, detail="Userinfo fetch failed")
         if ui_resp.status_code >= 400:
             logger.error("Userinfo fetch failed: %s", ui_resp.text)
-            raise HTTPException(
-                status_code=502,
-                detail="Userinfo fetch failed",
-            )
+            audit("oauth_userinfo_error", status=ui_resp.status_code)
+            raise HTTPException(status_code=502, detail="Userinfo fetch failed")
         userinfo = ui_resp.json()
 
     email = userinfo.get(s.OAUTH_EMAIL_FIELD)
@@ -141,6 +151,7 @@ async def callback(request: Request):
         )
 
     request.session["user_email"] = email
+    audit("login_success", user=email)
     default_next = s.normalized_root_path + "/"
     next_url = request.session.pop("oauth_next", default_next) or default_next
     if not _is_safe_redirect(next_url):
@@ -149,9 +160,13 @@ async def callback(request: Request):
 
 
 @router.post("/logout")
-@router.get("/logout")
 async def logout(request: Request):
-    request.session.clear()
+    user = None
+    session = getattr(request, "session", None)
+    if session is not None:
+        user = session.get("user_email")
+        session.clear()
+    audit("logout", user=user)
     return RedirectResponse(
-        get_settings().normalized_root_path + "/", status_code=302
+        get_settings().normalized_root_path + "/", status_code=303
     )

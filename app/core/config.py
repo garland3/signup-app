@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # LiteLLM proxy connection
     LITELLM_BASE_URL: str = "http://localhost:4000"
     LITELLM_ADMIN_KEY: str = ""
+    # Timeouts (seconds) for outbound calls to LiteLLM
+    LITELLM_CONNECT_TIMEOUT: float = 2.0
+    LITELLM_READ_TIMEOUT: float = 10.0
 
     # Auth mode: "proxy" (header injection from reverse proxy) or "oauth"
     AUTH_MODE: Literal["proxy", "oauth"] = "proxy"
@@ -24,8 +27,16 @@ class Settings(BaseSettings):
     TEST_USER: str = "test@test.com"
     PROXY_SECRET_HEADER: str = "X-Proxy-Secret"
     PROXY_SECRET: str = ""
-    FEATURE_PROXY_SECRET_ENABLED: bool = False
+    # Require a shared proxy secret by default. Only disable for local dev.
+    FEATURE_PROXY_SECRET_ENABLED: bool = True
     STRIP_USER_DOMAIN: bool = False
+    # When True, unauthenticated requests fall back to TEST_USER. This is
+    # an explicit, dangerous development-only opt-in. Decoupled from
+    # DEBUG_MODE so a single misconfigured env var cannot disable auth.
+    ALLOW_TEST_USER: bool = False
+    # Escape hatch to allow starting in insecure proxy-mode configurations
+    # (e.g. for local tooling). Never enable in production.
+    ALLOW_INSECURE_STARTUP: bool = False
 
     # OAuth 2.0 / OIDC provider settings (used when AUTH_MODE=oauth)
     OAUTH_CLIENT_ID: str = ""
@@ -45,10 +56,17 @@ class Settings(BaseSettings):
     SESSION_COOKIE_NAME: str = "signup_session"
     # Max age of session cookie in seconds (default 7 days)
     SESSION_MAX_AGE: int = 60 * 60 * 24 * 7
+    # Idle timeout in seconds (session evicted if unused). Default 1 day.
+    SESSION_IDLE_TIMEOUT: int = 60 * 60 * 24
     # Require HTTPS for the session cookie. Set to false when running behind
     # a TLS-terminating proxy/ingress (e.g. in Kubernetes) where the app
     # itself only sees plain HTTP traffic.
     SESSION_COOKIE_SECURE: bool = True
+
+    # Rate limits (fixed window, in-memory)
+    RATE_LIMIT_API_PER_MINUTE: int = 120
+    RATE_LIMIT_KEY_CREATE_PER_HOUR: int = 30
+    RATE_LIMIT_LOGIN_PER_MINUTE: int = 10
 
     # Key policy
     MAX_ACTIVE_KEYS_PER_USER: int | None = None

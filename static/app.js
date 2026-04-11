@@ -1,6 +1,15 @@
 var currentKeys = [];
-var appConfig = {app_name: "API Keys", required_metadata: [], max_active_keys: null, nav_links: []};
-var API_BASE = (window.APP_ROOT_PATH || "") + "/api";
+var appConfig = {
+    app_name: "API Keys",
+    required_metadata: [],
+    max_active_keys: null,
+    nav_links: [],
+};
+var rootPathMeta = document.querySelector('meta[name="app-root-path"]');
+var ROOT_PATH = rootPathMeta ? rootPathMeta.getAttribute("content") : "";
+// Exposed for any external tooling/tests that still read window.APP_ROOT_PATH.
+window.APP_ROOT_PATH = ROOT_PATH;
+var API_BASE = ROOT_PATH + "/api";
 
 async function loadConfig() {
     var r = await fetch(API_BASE + "/config");
@@ -18,7 +27,7 @@ function renderNavLinks() {
     var nav = document.getElementById("nav-links");
     if (!nav) return;
     var links = appConfig.nav_links || [];
-    nav.innerHTML = "";
+    nav.textContent = "";
     if (links.length === 0) {
         nav.classList.add("hidden");
         return;
@@ -53,7 +62,7 @@ function renderMetadataHeaders() {
 
 function renderMetadataInputs() {
     var container = document.getElementById("required-metadata-fields");
-    container.innerHTML = "";
+    container.textContent = "";
     var fields = appConfig.required_metadata || [];
     fields.forEach(function(f) {
         var label = document.createElement("label");
@@ -103,31 +112,56 @@ function renderKeys() {
 
     var metaFields = appConfig.required_metadata || [];
 
-    tbody.innerHTML = currentKeys.map(function(k) {
-        var status = k.is_active ? "Active" : "Inactive";
-        var statusClass = k.is_active ? "status-active" : "status-revoked";
+    // Rebuild rows using DOM APIs rather than HTML concatenation so no
+    // untrusted value ever enters an HTML/JS parsing context.
+    tbody.textContent = "";
+    currentKeys.forEach(function(k) {
+        var tr = document.createElement("tr");
+        appendCell(tr, k.name);
+
+        var prefixCell = document.createElement("td");
+        var prefixSpan = document.createElement("span");
+        prefixSpan.className = "key-prefix";
+        prefixSpan.textContent = k.prefix || "";
+        prefixCell.appendChild(prefixSpan);
+        tr.appendChild(prefixCell);
+
+        appendCell(tr, formatDate(k.created_at));
+        appendCell(tr, k.duration || "-");
+
         var spend = k.spend != null ? "$" + Number(k.spend).toFixed(2) : "-";
-        var duration = k.duration || "-";
-        var actions = k.is_active
-            ? '<button class="danger" onclick="deleteKey(\'' + escapeAttr(k.id) + '\')">Delete</button>'
-            : '';
+        appendCell(tr, spend);
 
-        var metaCells = metaFields.map(function(f) {
+        var statusCell = document.createElement("td");
+        var statusSpan = document.createElement("span");
+        statusSpan.className = k.is_active ? "status-active" : "status-revoked";
+        statusSpan.textContent = k.is_active ? "Active" : "Inactive";
+        statusCell.appendChild(statusSpan);
+        tr.appendChild(statusCell);
+
+        metaFields.forEach(function(f) {
             var v = (k.metadata && k.metadata[f]) ? k.metadata[f] : "-";
-            return '<td>' + escapeHtml(v) + '</td>';
-        }).join("");
+            appendCell(tr, v);
+        });
 
-        return '<tr>' +
-            '<td>' + escapeHtml(k.name) + '</td>' +
-            '<td><span class="key-prefix">' + escapeHtml(k.prefix) + '</span></td>' +
-            '<td>' + formatDate(k.created_at) + '</td>' +
-            '<td>' + escapeHtml(duration) + '</td>' +
-            '<td>' + spend + '</td>' +
-            '<td><span class="' + statusClass + '">' + status + '</span></td>' +
-            metaCells +
-            '<td>' + actions + '</td>' +
-        '</tr>';
-    }).join("");
+        var actionsCell = document.createElement("td");
+        if (k.is_active) {
+            var btn = document.createElement("button");
+            btn.className = "danger";
+            btn.textContent = "Delete";
+            btn.addEventListener("click", function() { deleteKey(k.id); });
+            actionsCell.appendChild(btn);
+        }
+        tr.appendChild(actionsCell);
+
+        tbody.appendChild(tr);
+    });
+}
+
+function appendCell(tr, text) {
+    var td = document.createElement("td");
+    td.textContent = text == null ? "" : String(text);
+    tr.appendChild(td);
 }
 
 function showCreateModal() {
@@ -219,17 +253,11 @@ function formatDate(dateStr) {
     });
 }
 
-function escapeHtml(str) {
-    if (str == null) return "";
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function escapeAttr(str) {
-    if (!str) return "";
-    return str.replace(/'/g, "\\'").replace(/"/g, "&quot;");
-}
+document.getElementById("create-btn").addEventListener("click", showCreateModal);
+document.getElementById("create-cancel-btn").addEventListener("click", hideCreateModal);
+document.getElementById("create-submit-btn").addEventListener("click", createKey);
+document.getElementById("copy-key-btn").addEventListener("click", copyKey);
+document.getElementById("show-key-done-btn").addEventListener("click", hideShowKeyModal);
 
 loadConfig().then(function() {
     loadUser();

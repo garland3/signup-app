@@ -11,6 +11,9 @@ def _install_settings(**overrides) -> Settings:
         DEBUG_MODE=True,
         LITELLM_BASE_URL="http://mock-litellm:4000",
         LITELLM_ADMIN_KEY="sk-test-admin-key",
+        # Proxy-mode guards require DEBUG_MODE or ALLOW_INSECURE_STARTUP.
+        FEATURE_PROXY_SECRET_ENABLED=False,
+        ALLOW_INSECURE_STARTUP=True,
     )
     base.update(overrides)
     settings = Settings(**base)
@@ -33,7 +36,8 @@ async def test_no_root_path_serves_from_site_root():
         assert r.status_code == 200
         # Placeholder should be replaced with empty string, leaving absolute paths.
         assert "/static/app.js" in r.text
-        assert 'window.APP_ROOT_PATH = "";' in r.text
+        # Root path is exposed via a meta tag (strict CSP forbids inline JS).
+        assert 'name="app-root-path" content=""' in r.text
 
 
 @pytest.mark.asyncio
@@ -58,7 +62,7 @@ async def test_root_path_mounts_app_under_prefix():
         assert r.status_code == 200
         assert "/start/static/app.js" in r.text
         assert "/start/static/style.css" in r.text
-        assert 'window.APP_ROOT_PATH = "/start";' in r.text
+        assert 'name="app-root-path" content="/start"' in r.text
 
         # Static assets are reachable at the prefixed path.
         r = await c.get("/start/static/app.js")
@@ -96,6 +100,8 @@ async def test_root_path_proxy_auth_middleware_honours_prefix():
         ROOT_PATH="/start",
         DEBUG_MODE=False,
         AUTH_MODE="proxy",
+        FEATURE_PROXY_SECRET_ENABLED=False,
+        ALLOW_INSECURE_STARTUP=True,
     )
     app = main_mod.create_app()
     async with AsyncClient(
