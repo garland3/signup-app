@@ -570,7 +570,11 @@ async def test_strip_user_domain():
     from app.core.middleware import AuthMiddleware
     from fastapi import FastAPI, Request
 
-    s = Settings(DEBUG_MODE=False, STRIP_USER_DOMAIN=True)
+    s = Settings(
+        DEBUG_MODE=False,
+        STRIP_USER_DOMAIN=True,
+        FEATURE_PROXY_SECRET_ENABLED=False,
+    )
     app = FastAPI()
     app.add_middleware(AuthMiddleware, settings=s)
 

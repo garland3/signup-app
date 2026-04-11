@@ -1,10 +1,11 @@
 import pytest
 import respx
 from httpx import AsyncClient, ASGITransport, Response
-from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import Settings
 from app.core.middleware import AuthMiddleware
+from app.core.rate_limit import limiter
+from app.core.sessions import InMemorySessionMiddleware
 from app.routes.auth import router as auth_router
 from fastapi import FastAPI, Request
 
@@ -30,13 +31,15 @@ def _oauth_settings(**overrides) -> Settings:
 def _make_app(settings: Settings) -> FastAPI:
     import app.core.config as config_mod
     config_mod.settings = settings
+    limiter.reset()
 
     app = FastAPI()
     app.add_middleware(AuthMiddleware, settings=settings)
     app.add_middleware(
-        SessionMiddleware,
-        secret_key=settings.SESSION_SECRET,
-        session_cookie=settings.SESSION_COOKIE_NAME,
+        InMemorySessionMiddleware,
+        cookie_name=settings.SESSION_COOKIE_NAME,
+        max_age=settings.SESSION_MAX_AGE,
+        idle_timeout=settings.SESSION_IDLE_TIMEOUT,
         https_only=False,
     )
     app.include_router(auth_router)

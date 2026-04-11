@@ -7,7 +7,11 @@ def test_default_settings():
     assert s.AUTH_USER_HEADER == "X-User-Email"
     assert s.TEST_USER == "test@test.com"
     assert s.LITELLM_BASE_URL == "http://localhost:4000"
-    assert s.FEATURE_PROXY_SECRET_ENABLED is False
+    # Secure-by-default: shared proxy secret is required.
+    assert s.FEATURE_PROXY_SECRET_ENABLED is True
+    # Dev-only bypass flags default off.
+    assert s.ALLOW_TEST_USER is False
+    assert s.ALLOW_INSECURE_STARTUP is False
 
 
 def test_debug_mode_enabled():

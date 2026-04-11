@@ -2,10 +2,11 @@ import pytest
 import respx
 from fastapi import FastAPI, Request
 from httpx import AsyncClient, ASGITransport, Response
-from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import Settings
 from app.core.middleware import AuthMiddleware
+from app.core.rate_limit import limiter
+from app.core.sessions import InMemorySessionMiddleware
 from app.routes.auth import router as auth_router
 
 
@@ -31,13 +32,15 @@ def _make_app(settings: Settings) -> FastAPI:
     # Patch module-level settings so /api/auth routes pick them up
     import app.core.config as config_mod
     config_mod.settings = settings
+    limiter.reset()
 
     app = FastAPI()
     app.add_middleware(AuthMiddleware, settings=settings)
     app.add_middleware(
-        SessionMiddleware,
-        secret_key=settings.SESSION_SECRET,
-        session_cookie=settings.SESSION_COOKIE_NAME,
+        InMemorySessionMiddleware,
+        cookie_name=settings.SESSION_COOKIE_NAME,
+        max_age=settings.SESSION_MAX_AGE,
+        idle_timeout=settings.SESSION_IDLE_TIMEOUT,
         https_only=False,
     )
     app.include_router(auth_router)
@@ -169,6 +172,10 @@ async def test_oauth_logout_clears_session():
             r = await c.get("/api/me")
             assert r.status_code == 200
 
-            await c.get("/api/auth/logout", follow_redirects=False)
+            # Logout is POST-only (GET used to be a CSRF-able side effect).
+            get_logout = await c.get("/api/auth/logout", follow_redirects=False)
+            assert get_logout.status_code == 405
+
+            await c.post("/api/auth/logout", follow_redirects=False)
             r = await c.get("/api/me")
             assert r.status_code == 401

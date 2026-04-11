@@ -1,14 +1,41 @@
+import logging
+
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
+from app.core.audit import audit
 from app.core.config import get_settings
 from app.core.litellm_client import LiteLLMClient
+from app.core.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
 
 def _get_client() -> LiteLLMClient:
     return LiteLLMClient(get_settings())
+
+
+def _upstream_error(op: str, exc: Exception) -> HTTPException:
+    """Log the real reason and return a generic 502 to the client.
+
+    Prevents raw exception text from leaking upstream internals or
+    operator-only hints to end users.
+    """
+    logger.exception("LiteLLM %s failed: %s", op, exc)
+    return HTTPException(status_code=502, detail="Upstream service error")
+
+
+def _reject_raw_api_key(token: str) -> None:
+    """Reject path params that look like a raw API key.
+
+    URL path segments end up in access logs, APM traces, browser
+    history, and Referer headers. Only opaque token IDs should appear
+    there, never the secret key itself.
+    """
+    if token.startswith("sk-"):
+        raise HTTPException(status_code=400, detail="Invalid key identifier")
 
 
 class CreateKeyRequest(BaseModel):
@@ -86,7 +113,7 @@ def _is_expired(expires: str | None) -> bool:
 def _normalize_key_alias(name: str, user_email: str) -> str:
     """Ensure key alias starts with exactly one '{user_email}-' prefix.
 
-    Collapses repeated prefixes (e.g. "alice-alice-MyKey" → "alice-MyKey")
+    Collapses repeated prefixes (e.g. "alice-alice-MyKey" -> "alice-MyKey")
     and handles STRIP_USER_DOMAIN mode where user_email may be just the
     username (e.g. "alice") while the user-supplied name might contain the
     full email prefix (e.g. "alice@corp-mail.com-MyKey"). In that case the
@@ -151,6 +178,13 @@ async def create_key(body: CreateKeyRequest, request: Request):
     client = _get_client()
     user_email = request.state.user_email
 
+    # Per-user hourly cap on key creation, on top of the per-minute API cap.
+    if not limiter.check(
+        "key_create", user_email, settings.RATE_LIMIT_KEY_CREATE_PER_HOUR, 3600
+    ):
+        audit("rate_limited", bucket="key_create", user=user_email)
+        raise HTTPException(status_code=429, detail="Too many key creations")
+
     # Validate required metadata fields
     required = settings.required_metadata_fields
     metadata = dict(body.metadata or {})
@@ -166,7 +200,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
         try:
             existing = await client.list_keys(user_id=user_email)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+            raise _upstream_error("list_keys", e)
         keys = existing if isinstance(existing, list) else existing.get("keys", [])
         active_count = sum(
             1 for k in keys
@@ -186,7 +220,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
     try:
         await client.ensure_user(user_email)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("ensure_user", e)
 
     # Persist duration in metadata so we can show it in the UI
     if body.duration:
@@ -214,12 +248,21 @@ async def create_key(body: CreateKeyRequest, request: Request):
     try:
         result = await client.generate_key(**kwargs)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("generate_key", e)
 
     full_key = result.get("key", "")
     # Ensure metadata surfaces in the response even if LiteLLM strips it
     if "metadata" not in result:
         result["metadata"] = metadata
+    audit(
+        "key_create",
+        user=user_email,
+        key_id=result.get("token_id", ""),
+        key_alias=key_name,
+        models=body.models or [],
+        max_budget=body.max_budget,
+        duration=body.duration,
+    )
     return _format_key_response(result, include_full_key=full_key)
 
 
@@ -231,7 +274,7 @@ async def list_keys(request: Request):
     try:
         result = await client.list_keys(user_id=user_email)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("list_keys", e)
 
     keys = result if isinstance(result, list) else result.get("keys", [])
     formatted = [_format_key_response(k) for k in keys]
@@ -250,6 +293,7 @@ def _neg_created(created: str) -> str:
 
 @router.patch("/keys/{token}")
 async def update_key(token: str, body: UpdateKeyRequest, request: Request):
+    _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
 
@@ -283,16 +327,23 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     try:
         result = await client.update_key(key=token, **kwargs)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("update_key", e)
 
     if "metadata" not in result and "metadata" in kwargs:
         result["metadata"] = kwargs["metadata"]
+    audit(
+        "key_update",
+        user=user_email,
+        key_id=token,
+        changed=sorted(kwargs.keys()),
+    )
     return _format_key_response(result)
 
 
 @router.delete("/keys/{token}")
 async def delete_key(token: str, request: Request):
     """Soft delete: set the key's duration to 0 so it expires immediately."""
+    _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
 
@@ -308,13 +359,15 @@ async def delete_key(token: str, request: Request):
             key=token, duration="0s", metadata=merged_meta
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("update_key", e)
 
+    audit("key_delete", user=user_email, key_id=token)
     return {"deleted": True}
 
 
 @router.post("/keys/{token}/block")
 async def block_key(token: str, request: Request):
+    _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
 
@@ -323,13 +376,15 @@ async def block_key(token: str, request: Request):
     try:
         result = await client.block_key(key=token)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("block_key", e)
 
+    audit("key_block", user=user_email, key_id=token)
     return _format_key_response(result)
 
 
 @router.post("/keys/{token}/unblock")
 async def unblock_key(token: str, request: Request):
+    _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
 
@@ -338,6 +393,7 @@ async def unblock_key(token: str, request: Request):
     try:
         result = await client.unblock_key(key=token)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LiteLLM error: {e}")
+        raise _upstream_error("unblock_key", e)
 
+    audit("key_unblock", user=user_email, key_id=token)
     return _format_key_response(result)
