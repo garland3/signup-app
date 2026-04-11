@@ -65,3 +65,34 @@ def test_nav_links_skips_malformed_entries():
     assert s.nav_links == [
         {"name": "Good", "url": "https://good.example.com"},
     ]
+
+
+def test_trusted_origins_empty_by_default():
+    s = Settings(LITELLM_ADMIN_KEY="sk-test")
+    assert s.trusted_origins == []
+
+
+def test_trusted_origins_parsing_and_normalization():
+    s = Settings(
+        LITELLM_ADMIN_KEY="sk-test",
+        TRUSTED_ORIGINS=(
+            "https://App.Example.COM, "
+            "https://staging.example.com:8443/some/path, "
+            "http://localhost:3000"
+        ),
+    )
+    # Host lowercased; path stripped; explicit ports preserved.
+    assert s.trusted_origins == [
+        "https://app.example.com",
+        "https://staging.example.com:8443",
+        "http://localhost:3000",
+    ]
+
+
+def test_trusted_origins_skips_malformed_entries():
+    s = Settings(
+        LITELLM_ADMIN_KEY="sk-test",
+        # No scheme, empty entries, bare hostnames - all skipped.
+        TRUSTED_ORIGINS="example.com,, ,https://good.example.com,not-a-url",
+    )
+    assert s.trusted_origins == ["https://good.example.com"]

@@ -147,8 +147,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
     def _check_csrf(self, request: Request) -> JSONResponse | None:
         """Reject cross-origin state-changing requests in OAuth mode.
 
-        Uses Origin (preferred) or Referer. Same-origin is enforced by
-        comparing scheme+host+port against the request's own URL.
+        Uses Origin (preferred) or Referer. When TRUSTED_ORIGINS is
+        configured, the source origin must match one of the entries in
+        that list exactly (scheme + host + optional port). This is the
+        supported mode for deployments behind a TLS-terminating reverse
+        proxy or Kubernetes ingress, where the app's own request.url
+        reflects the internal (http://pod:port) URL instead of the
+        public origin the browser sees.
+
+        When TRUSTED_ORIGINS is not configured, fall back to a strict
+        same-origin comparison against the app's own request URL -
+        correct for single-host dev setups.
         """
         origin = request.headers.get("origin")
         referer = request.headers.get("referer")
@@ -158,12 +167,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 {"detail": "Missing Origin/Referer"}, status_code=403
             )
 
-        target = urlparse(str(request.url))
         source_url = origin or referer
         source = urlparse(source_url)
-        if (source.scheme, source.hostname, source.port) != (
+        source_host = (source.hostname or "").lower()
+        source_origin = None
+        if source.scheme and source_host:
+            netloc = source_host
+            if source.port:
+                netloc = f"{source_host}:{source.port}"
+            source_origin = f"{source.scheme.lower()}://{netloc}"
+
+        trusted = self.settings.trusted_origins
+        if trusted:
+            if source_origin and source_origin in trusted:
+                return None
+            return JSONResponse(
+                {"detail": "Cross-origin request denied"}, status_code=403
+            )
+
+        target = urlparse(str(request.url))
+        if (source.scheme, source_host, source.port) != (
             target.scheme,
-            target.hostname,
+            (target.hostname or "").lower(),
             target.port,
         ):
             return JSONResponse(
