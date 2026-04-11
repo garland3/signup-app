@@ -1,5 +1,5 @@
 var currentKeys = [];
-var appConfig = {app_name: "API Keys", required_metadata: [], max_active_keys: null};
+var appConfig = {app_name: "API Keys", required_metadata: [], max_active_keys: null, nav_links: []};
 var API_BASE = (window.APP_ROOT_PATH || "") + "/api";
 
 async function loadConfig() {
@@ -9,8 +9,29 @@ async function loadConfig() {
     var title = appConfig.app_name || "API Keys";
     document.getElementById("app-title").textContent = title;
     document.title = title;
+    renderNavLinks();
     renderMetadataInputs();
     renderMetadataHeaders();
+}
+
+function renderNavLinks() {
+    var nav = document.getElementById("nav-links");
+    if (!nav) return;
+    var links = appConfig.nav_links || [];
+    nav.innerHTML = "";
+    if (links.length === 0) {
+        nav.classList.add("hidden");
+        return;
+    }
+    links.forEach(function(link) {
+        var a = document.createElement("a");
+        a.href = link.url;
+        a.textContent = link.name;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        nav.appendChild(a);
+    });
+    nav.classList.remove("hidden");
 }
 
 function renderMetadataHeaders() {
