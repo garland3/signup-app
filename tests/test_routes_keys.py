@@ -306,6 +306,27 @@ async def test_get_config(app):
     assert "app_name" in data
     assert "required_metadata" in data
     assert "max_active_keys" in data
+    assert "nav_links" in data
+    assert data["nav_links"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_config_returns_nav_links(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.NAV_LINKS
+    s.NAV_LINKS = "Docs|https://docs.example.com,Support|https://support.example.com"
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/api/config", headers=AUTH)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["nav_links"] == [
+            {"name": "Docs", "url": "https://docs.example.com"},
+            {"name": "Support", "url": "https://support.example.com"},
+        ]
+    finally:
+        s.NAV_LINKS = original
 
 
 @pytest.mark.asyncio
