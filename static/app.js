@@ -81,6 +81,28 @@ function prettyLabel(field) {
     return field.replace(/_/g, " ").replace(/\b\w/g, function(c) { return c.toUpperCase(); });
 }
 
+function showToast(message, type) {
+    var container = document.getElementById("toast-container");
+    if (!container) return;
+    var toast = document.createElement("div");
+    toast.className = "toast toast-" + (type || "info");
+    toast.setAttribute("role", type === "error" ? "alert" : "status");
+    // textContent (not innerHTML) so server-supplied error strings can
+    // never escape into markup.
+    toast.textContent = message;
+    container.appendChild(toast);
+    // Force a reflow so the initial (hidden) state is committed before
+    // we add the visible class, allowing the CSS transition to run.
+    void toast.offsetWidth;
+    toast.classList.add("toast-visible");
+    setTimeout(function() {
+        toast.classList.remove("toast-visible");
+        setTimeout(function() {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 250);
+    }, 4000);
+}
+
 async function loadUser() {
     var r = await fetch(API_BASE + "/me");
     if (r.ok) {
@@ -204,7 +226,7 @@ async function createKey() {
         }
     });
     if (missing.length > 0) {
-        alert("Please fill in required fields: " + missing.join(", "));
+        showToast("Please fill in required fields: " + missing.join(", "), "error");
         return;
     }
     if (Object.keys(metadata).length > 0) body.metadata = metadata;
@@ -217,7 +239,7 @@ async function createKey() {
 
     if (!r.ok) {
         var err = await r.json().catch(function() { return {}; });
-        alert("Failed to create key: " + (err.detail || r.statusText));
+        showToast("Failed to create key: " + (err.detail || r.statusText), "error");
         return;
     }
 

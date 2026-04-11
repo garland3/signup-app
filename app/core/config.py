@@ -81,6 +81,20 @@ class Settings(BaseSettings):
     # those characters (schemes, query strings) don't need escaping.
     NAV_LINKS: str = ""
 
+    # Comma-separated list of origins (scheme://host[:port]) that are
+    # allowed for cross-origin-looking state-changing requests in OAuth
+    # mode. When the app runs behind a TLS-terminating reverse proxy or
+    # Kubernetes ingress, the browser's Origin header reflects the public
+    # URL (e.g. "https://app.example.com") while the app itself only sees
+    # plain HTTP on an internal host. Without this setting the built-in
+    # CSRF same-origin check would compare those two and reject every
+    # write as "Cross-origin request denied". List the public origins the
+    # app is reachable on, e.g.
+    #   "https://app.example.com,https://app-staging.example.com"
+    # Trailing slashes and paths are ignored. When empty, the app falls
+    # back to a strict same-origin comparison against its own request URL.
+    TRUSTED_ORIGINS: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property
@@ -115,6 +129,36 @@ class Settings(BaseSettings):
     @property
     def oauth_scope_list(self) -> list[str]:
         return [s for s in self.OAUTH_SCOPES.split() if s]
+
+    @property
+    def trusted_origins(self) -> list[str]:
+        """Parse TRUSTED_ORIGINS into a normalized list of origins.
+
+        Each entry is lowercased and stripped of any path/query/fragment
+        so comparisons against a browser-sent Origin header are exact
+        (scheme + host + optional port only). Malformed entries without
+        a scheme are silently skipped so a typo can't accidentally
+        widen the allow-list.
+        """
+        raw = self.TRUSTED_ORIGINS or ""
+        out: list[str] = []
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            # Require an explicit scheme so we never match "*.example.com"
+            # against a maliciously-crafted Origin: null or similar.
+            if "://" not in entry:
+                continue
+            from urllib.parse import urlparse
+            parsed = urlparse(entry)
+            if not parsed.scheme or not parsed.hostname:
+                continue
+            netloc = parsed.hostname.lower()
+            if parsed.port:
+                netloc = f"{netloc}:{parsed.port}"
+            out.append(f"{parsed.scheme.lower()}://{netloc}")
+        return out
 
     @property
     def normalized_root_path(self) -> str:

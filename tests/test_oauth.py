@@ -149,6 +149,131 @@ async def test_oauth_login_404_when_mode_is_proxy():
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_oauth_csrf_same_origin_write_allowed():
+    # In the default (no TRUSTED_ORIGINS) configuration, a write from
+    # the same origin as request.url must succeed.
+    settings = _oauth_settings()
+    app = _make_app(settings)
+
+    @app.post("/api/widgets")
+    async def create_widget(request: Request):
+        return {"ok": True, "user": request.state.user_email}
+
+    respx.post("https://idp.example.com/token").mock(
+        return_value=Response(200, json={"access_token": "at-123"})
+    )
+    respx.get("https://idp.example.com/userinfo").mock(
+        return_value=Response(200, json={"email": "alice@example.com"})
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        login = await c.get("/api/auth/login", follow_redirects=False)
+        state = login.headers["location"].split("state=")[1].split("&")[0]
+        await c.get(
+            f"/api/auth/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        r = await c.post(
+            "/api/widgets", headers={"Origin": "http://test"}
+        )
+        assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_oauth_csrf_cross_origin_write_denied_by_default():
+    # Without TRUSTED_ORIGINS, a write with an Origin that doesn't
+    # match the app's own URL must be rejected.
+    settings = _oauth_settings()
+    app = _make_app(settings)
+
+    @app.post("/api/widgets")
+    async def create_widget(request: Request):  # pragma: no cover
+        return {"ok": True}
+
+    respx.post("https://idp.example.com/token").mock(
+        return_value=Response(200, json={"access_token": "at-123"})
+    )
+    respx.get("https://idp.example.com/userinfo").mock(
+        return_value=Response(200, json={"email": "alice@example.com"})
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        login = await c.get("/api/auth/login", follow_redirects=False)
+        state = login.headers["location"].split("state=")[1].split("&")[0]
+        await c.get(
+            f"/api/auth/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        r = await c.post(
+            "/api/widgets",
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Cross-origin request denied"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_oauth_csrf_trusted_origin_allowed_behind_proxy():
+    # Behind a TLS-terminating ingress the app sees http://test but the
+    # browser's Origin header is the public https URL. With
+    # TRUSTED_ORIGINS configured, the write must succeed.
+    settings = _oauth_settings(
+        TRUSTED_ORIGINS="https://app.example.com,https://staging.example.com"
+    )
+    app = _make_app(settings)
+
+    @app.post("/api/widgets")
+    async def create_widget(request: Request):
+        return {"ok": True, "user": request.state.user_email}
+
+    respx.post("https://idp.example.com/token").mock(
+        return_value=Response(200, json={"access_token": "at-123"})
+    )
+    respx.get("https://idp.example.com/userinfo").mock(
+        return_value=Response(200, json={"email": "alice@example.com"})
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        login = await c.get("/api/auth/login", follow_redirects=False)
+        state = login.headers["location"].split("state=")[1].split("&")[0]
+        await c.get(
+            f"/api/auth/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+
+        # Origin matches an entry in TRUSTED_ORIGINS - allowed.
+        r = await c.post(
+            "/api/widgets",
+            headers={"Origin": "https://app.example.com"},
+        )
+        assert r.status_code == 200
+
+        # Origin not in TRUSTED_ORIGINS - denied, even though same host
+        # as the app would otherwise have worked.
+        r = await c.post(
+            "/api/widgets",
+            headers={"Origin": "http://test"},
+        )
+        assert r.status_code == 403
+
+        # Attacker origin still denied.
+        r = await c.post(
+            "/api/widgets",
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_oauth_logout_clears_session():
     settings = _oauth_settings()
     app = _make_app(settings)
