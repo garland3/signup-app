@@ -1,5 +1,10 @@
 var currentKeys = [];
-var appConfig = {app_name: "API Keys", required_metadata: [], max_active_keys: null};
+var appConfig = {
+    app_name: "API Keys",
+    required_metadata: [],
+    max_active_keys: null,
+    nav_links: [],
+};
 var rootPathMeta = document.querySelector('meta[name="app-root-path"]');
 var ROOT_PATH = rootPathMeta ? rootPathMeta.getAttribute("content") : "";
 // Exposed for any external tooling/tests that still read window.APP_ROOT_PATH.
@@ -13,8 +18,29 @@ async function loadConfig() {
     var title = appConfig.app_name || "API Keys";
     document.getElementById("app-title").textContent = title;
     document.title = title;
+    renderNavLinks();
     renderMetadataInputs();
     renderMetadataHeaders();
+}
+
+function renderNavLinks() {
+    var nav = document.getElementById("nav-links");
+    if (!nav) return;
+    var links = appConfig.nav_links || [];
+    nav.textContent = "";
+    if (links.length === 0) {
+        nav.classList.add("hidden");
+        return;
+    }
+    links.forEach(function(link) {
+        var a = document.createElement("a");
+        a.href = link.url;
+        a.textContent = link.name;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        nav.appendChild(a);
+    });
+    nav.classList.remove("hidden");
 }
 
 function renderMetadataHeaders() {

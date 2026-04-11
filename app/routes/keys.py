@@ -169,6 +169,7 @@ async def get_config():
         "app_name": s.APP_NAME,
         "required_metadata": s.required_metadata_fields,
         "max_active_keys": s.MAX_ACTIVE_KEYS_PER_USER,
+        "nav_links": s.nav_links,
     }
 
 

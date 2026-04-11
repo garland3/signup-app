@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # e.g. "project,task_number"
     REQUIRED_KEY_METADATA: str = ""
 
+    # Custom navigation links shown in the page header. Format is a
+    # comma-separated list of "Name|URL" pairs, e.g.
+    #   "Docs|https://docs.example.com,Support|https://support.example.com"
+    # The "|" separator is used (instead of ":" or "=") so URLs containing
+    # those characters (schemes, query strings) don't need escaping.
+    NAV_LINKS: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property
@@ -83,6 +90,27 @@ class Settings(BaseSettings):
         return [
             f.strip() for f in self.REQUIRED_KEY_METADATA.split(",") if f.strip()
         ]
+
+    @property
+    def nav_links(self) -> list[dict[str, str]]:
+        """Parse NAV_LINKS into a list of {name, url} dicts.
+
+        Entries without a "|" separator, or with an empty name or URL, are
+        silently skipped so a malformed entry can't break the UI.
+        """
+        if not self.NAV_LINKS:
+            return []
+        links: list[dict[str, str]] = []
+        for raw in self.NAV_LINKS.split(","):
+            entry = raw.strip()
+            if not entry or "|" not in entry:
+                continue
+            name, url = entry.split("|", 1)
+            name = name.strip()
+            url = url.strip()
+            if name and url:
+                links.append({"name": name, "url": url})
+        return links
 
     @property
     def oauth_scope_list(self) -> list[str]:
