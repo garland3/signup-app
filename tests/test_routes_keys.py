@@ -308,6 +308,24 @@ async def test_get_config(app):
     assert "max_active_keys" in data
     assert "nav_links" in data
     assert data["nav_links"] == []
+    # show_spend defaults to True and is always exposed so the frontend
+    # can decide whether to render the Spend column.
+    assert data["show_spend"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_config_show_spend_can_be_disabled(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.SHOW_SPEND_COLUMN
+    s.SHOW_SPEND_COLUMN = False
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/api/config", headers=AUTH)
+        assert r.status_code == 200
+        assert r.json()["show_spend"] is False
+    finally:
+        s.SHOW_SPEND_COLUMN = original
 
 
 @pytest.mark.asyncio
@@ -466,7 +484,7 @@ async def test_create_key_forces_user_email_prefix(app):
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
             "token_id": "tok_prefix",
-            "key_alias": "alice@example.com-My Key",
+            "key_alias": "alice@example.com-My-Key",
             "user_id": "alice@example.com",
             "created_at": "2026-03-09T00:00:00Z",
         })
@@ -478,7 +496,8 @@ async def test_create_key_forces_user_email_prefix(app):
     assert r.status_code == 201
     import json
     sent = json.loads(generate_route.calls[0].request.content)
-    assert sent["key_alias"] == "alice@example.com-My Key"
+    # Space is sanitized to a dash before the prefix is applied.
+    assert sent["key_alias"] == "alice@example.com-My-Key"
 
 
 @pytest.mark.asyncio
@@ -490,7 +509,7 @@ async def test_create_key_no_double_prefix(app):
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
             "token_id": "tok_prefix2",
-            "key_alias": "alice@example.com-My Key",
+            "key_alias": "alice@example.com-My-Key",
             "user_id": "alice@example.com",
             "created_at": "2026-03-09T00:00:00Z",
         })
@@ -502,7 +521,8 @@ async def test_create_key_no_double_prefix(app):
     assert r.status_code == 201
     import json
     sent = json.loads(generate_route.calls[0].request.content)
-    assert sent["key_alias"] == "alice@example.com-My Key"
+    # Prefix stripped, then space sanitized to a dash, then prefix re-applied.
+    assert sent["key_alias"] == "alice@example.com-My-Key"
 
 
 @pytest.fixture
@@ -528,7 +548,7 @@ async def test_create_key_no_double_prefix_strip_domain(strip_domain_app):
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
             "token_id": "tok_strip",
-            "key_alias": "alice-My Key",
+            "key_alias": "alice-My-Key",
             "user_id": "alice",
             "created_at": "2026-03-09T00:00:00Z",
         })
@@ -544,7 +564,7 @@ async def test_create_key_no_double_prefix_strip_domain(strip_domain_app):
     assert r.status_code == 201
     import json
     sent = json.loads(generate_route.calls[0].request.content)
-    assert sent["key_alias"] == "alice-My Key"
+    assert sent["key_alias"] == "alice-My-Key"
 
 
 @pytest.mark.asyncio
@@ -564,7 +584,7 @@ async def test_update_key_enforces_prefix(app):
         return_value=Response(200, json={
             "token_id": "tok_abc123",
             "token": "sk-abc123fullkey",
-            "key_alias": "alice@example.com-New Name",
+            "key_alias": "alice@example.com-New-Name",
             "user_id": "alice@example.com",
             "blocked": False,
             "created_at": "2026-03-09T00:00:00Z",
@@ -582,7 +602,63 @@ async def test_update_key_enforces_prefix(app):
     assert r.status_code == 200
     import json
     sent = json.loads(update_route.calls[0].request.content)
-    assert sent["key_alias"] == "alice@example.com-New Name"
+    # Space in name is sanitized to a dash.
+    assert sent["key_alias"] == "alice@example.com-New-Name"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_sanitizes_special_characters(app):
+    """Names with special chars are sanitized to alphanumeric + dash."""
+    mock_ensure_user()
+    generate_route = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_sani",
+            "key_alias": "alice@example.com-Hello-World-v2",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "Hello, World! v2.0"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 201
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)
+    # ", ", "!", ".", " " all become dashes, collapsed and trimmed.
+    assert sent["key_alias"] == "alice@example.com-Hello-World-v2-0"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_rejects_name_that_sanitizes_to_empty(app):
+    """A name with no alphanumeric characters is rejected as invalid."""
+    # No ensure_user/generate_key mocks: request must be rejected before
+    # any upstream calls are made.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "!!!"}, headers=AUTH)
+
+    assert r.status_code == 400
+    assert "alphanumeric" in r.json()["detail"].lower()
+
+
+def test_sanitize_key_name_helper():
+    from app.routes.keys import _sanitize_key_name
+
+    assert _sanitize_key_name("My Key") == "My-Key"
+    assert _sanitize_key_name("hello_world") == "hello-world"
+    assert _sanitize_key_name("a!!!b") == "a-b"
+    assert _sanitize_key_name("  leading and trailing  ") == "leading-and-trailing"
+    assert _sanitize_key_name("already-clean-123") == "already-clean-123"
+    assert _sanitize_key_name("###") == ""
+    # Unicode letters are stripped (the policy is ASCII alnum + dash only).
+    assert _sanitize_key_name("cafe\u0301") == "cafe"
 
 
 @pytest.mark.asyncio

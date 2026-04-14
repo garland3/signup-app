@@ -26,7 +26,7 @@
                     <th>Key</th>
                     <th>Created</th>
                     <th>Duration</th>
-                    <th>Spend</th>
+                    <th id="spend-col-header">Spend</th>
                     <th>Status</th>
                     <th></th>
                 </tr>
@@ -42,7 +42,7 @@
         <div class="modal-content">
             <h2>Create API Key</h2>
             <label for="key-name">Name</label>
-            <input type="text" id="key-name" placeholder="e.g. Production Server">
+            <input type="text" id="key-name" placeholder="e.g. production-server" pattern="[A-Za-z0-9\-]+" title="Letters, numbers, and dashes only">
             <label for="key-duration">Duration (optional)</label>
             <input type="text" id="key-duration" placeholder="e.g. 30d, 90d, 1y">
             <label for="key-budget">Max Budget $ (optional)</label>

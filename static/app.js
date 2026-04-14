@@ -4,6 +4,7 @@ var appConfig = {
     required_metadata: [],
     max_active_keys: null,
     nav_links: [],
+    show_spend: true,
 };
 var rootPathMeta = document.querySelector('meta[name="app-root-path"]');
 var ROOT_PATH = rootPathMeta ? rootPathMeta.getAttribute("content") : "";
@@ -15,12 +16,24 @@ async function loadConfig() {
     var r = await fetch(API_BASE + "/config");
     if (!r.ok) return;
     appConfig = await r.json();
+    if (appConfig.show_spend == null) appConfig.show_spend = true;
     var title = appConfig.app_name || "API Keys";
     document.getElementById("app-title").textContent = title;
     document.title = title;
     renderNavLinks();
     renderMetadataInputs();
+    renderSpendHeader();
     renderMetadataHeaders();
+}
+
+function renderSpendHeader() {
+    var th = document.getElementById("spend-col-header");
+    if (!th) return;
+    if (appConfig.show_spend) {
+        th.classList.remove("hidden");
+    } else {
+        th.classList.add("hidden");
+    }
 }
 
 function renderNavLinks() {
@@ -151,8 +164,10 @@ function renderKeys() {
         appendCell(tr, formatDate(k.created_at));
         appendCell(tr, k.duration || "-");
 
-        var spend = k.spend != null ? "$" + Number(k.spend).toFixed(2) : "-";
-        appendCell(tr, spend);
+        if (appConfig.show_spend) {
+            var spend = k.spend != null ? "$" + Number(k.spend).toFixed(2) : "-";
+            appendCell(tr, spend);
+        }
 
         var statusCell = document.createElement("td");
         var statusSpan = document.createElement("span");
