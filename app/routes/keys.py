@@ -1,4 +1,5 @@
 import logging
+import re
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
@@ -110,6 +111,24 @@ def _is_expired(expires: str | None) -> bool:
         return False
 
 
+_NAME_SANITIZE_RE = re.compile(r"[^A-Za-z0-9-]+")
+_COLLAPSE_DASH_RE = re.compile(r"-+")
+
+
+def _sanitize_key_name(name: str) -> str:
+    """Restrict a user-supplied key name to alphanumeric characters and dashes.
+
+    Any other character (spaces, punctuation, unicode, etc.) is replaced
+    with a dash; runs of dashes are collapsed and leading/trailing dashes
+    are stripped so the result is a clean slug. This is applied before
+    prepending the canonical ``{user_email}-`` prefix, so the email
+    characters in the prefix itself are preserved.
+    """
+    cleaned = _NAME_SANITIZE_RE.sub("-", name)
+    cleaned = _COLLAPSE_DASH_RE.sub("-", cleaned).strip("-")
+    return cleaned
+
+
 def _normalize_key_alias(name: str, user_email: str) -> str:
     """Ensure key alias starts with exactly one '{user_email}-' prefix.
 
@@ -119,6 +138,8 @@ def _normalize_key_alias(name: str, user_email: str) -> str:
     full email prefix (e.g. "alice@corp-mail.com-MyKey"). In that case the
     full-email prefix is replaced with the canonical stripped prefix so we
     avoid double-prefixing.
+
+    The non-prefix portion is sanitized to alphanumeric and dashes only.
     """
     prefix = f"{user_email}-"
     # Collapse any repeated canonical prefixes
@@ -130,12 +151,15 @@ def _normalize_key_alias(name: str, user_email: str) -> str:
     # separator so hyphens within domains (e.g. "corp-mail.com") aren't
     # mistaken for the separator.
     if "@" not in user_email and name.startswith(user_email + "@"):
-        import re
         match = re.match(
             re.escape(user_email) + r"@[^@]+\.[a-zA-Z]{2,}-", name
         )
         if match:
             name = name[match.end():]
+    # Restrict the user-portion to alphanumeric + dash. The prefix is
+    # system-generated from the authenticated user email and preserves
+    # characters like "@" and "." that sanitization would strip.
+    name = _sanitize_key_name(name)
     return prefix + name
 
 
@@ -170,6 +194,7 @@ async def get_config():
         "required_metadata": s.required_metadata_fields,
         "max_active_keys": s.MAX_ACTIVE_KEYS_PER_USER,
         "nav_links": s.nav_links,
+        "show_spend": s.SHOW_SPEND_COLUMN,
     }
 
 
@@ -185,6 +210,18 @@ async def create_key(body: CreateKeyRequest, request: Request):
     ):
         audit("rate_limited", bucket="key_create", user=user_email)
         raise HTTPException(status_code=429, detail="Too many key creations")
+
+    # Build the canonical alias up-front and reject names whose
+    # user-portion is empty after sanitization. This catches both plain
+    # garbage (``"!!!"``) and the prefix-stripping bypass where a name
+    # like ``"alice@example.com-!!!"`` would otherwise produce an alias
+    # that is just the ``{user_email}-`` prefix.
+    key_name = _normalize_key_alias(body.name, user_email)
+    if key_name == f"{user_email}-":
+        raise HTTPException(
+            status_code=400,
+            detail="Name must contain at least one alphanumeric character",
+        )
 
     # Validate required metadata fields
     required = settings.required_metadata_fields
@@ -226,9 +263,6 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # Persist duration in metadata so we can show it in the UI
     if body.duration:
         metadata["duration"] = body.duration
-
-    # Force key alias to always start with "{user_email}-" prefix
-    key_name = _normalize_key_alias(body.name, user_email)
 
     kwargs = {
         "user_id": user_email,
@@ -302,7 +336,15 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
 
     kwargs = {}
     if body.key_alias is not None:
-        kwargs["key_alias"] = _normalize_key_alias(body.key_alias, user_email)
+        new_alias = _normalize_key_alias(body.key_alias, user_email)
+        # Reject renames whose user-portion sanitizes to empty, so the
+        # stored alias can't be reduced to just the ``{user_email}-`` prefix.
+        if new_alias == f"{user_email}-":
+            raise HTTPException(
+                status_code=400,
+                detail="Name must contain at least one alphanumeric character",
+            )
+        kwargs["key_alias"] = new_alias
     if body.models is not None:
         kwargs["models"] = body.models
     if body.max_budget is not None:

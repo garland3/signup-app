@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # Comma-separated list of required metadata field names per key
     # e.g. "project,task_number"
     REQUIRED_KEY_METADATA: str = ""
+    # Show the "Spend" column in the keys table. Set to False for
+    # deployments where spend tracking isn't meaningful and the column
+    # would just add noise.
+    SHOW_SPEND_COLUMN: bool = True
 
     # Custom navigation links shown in the page header. Format is a
     # comma-separated list of "Name|URL" pairs, e.g.
