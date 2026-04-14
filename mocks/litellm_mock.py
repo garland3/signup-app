@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Mock LiteLLM Proxy")
@@ -104,6 +105,30 @@ async def get_user(user_id: str = "", authorization: str = Header()):
 @app.post("/key/generate")
 async def generate_key(body: GenerateKeyRequest, authorization: str = Header()):
     check_admin(authorization)
+
+    # Mirror LiteLLM's real _enforce_unique_key_alias behavior so the
+    # signup-app sees the same failure mode in local dev as production.
+    # We return a JSONResponse directly (instead of HTTPException) so the
+    # body matches the real proxy's exception-handler shape:
+    #   {"error": {"message": ..., "type": ..., "param": ..., "code": ...}}
+    # rather than FastAPI's default {"detail": ...} wrapper.
+    if body.key_alias:
+        for existing in keys_db.values():
+            if existing.get("key_alias") == body.key_alias:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": {
+                            "message": (
+                                "Unique key aliases are required. "
+                                f"Key alias={body.key_alias} already exists."
+                            ),
+                            "type": "bad_request_error",
+                            "param": "key_alias",
+                            "code": "400",
+                        }
+                    },
+                )
 
     token = "sk-" + secrets.token_hex(24)
     token_id = str(uuid.uuid4())

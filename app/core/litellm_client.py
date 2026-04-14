@@ -7,6 +7,44 @@ from app.core.config import Settings
 logger = logging.getLogger(__name__)
 
 
+class DuplicateKeyAliasError(Exception):
+    """Raised when LiteLLM rejects a key because the alias is already taken.
+
+    LiteLLM's ``/key/generate`` endpoint enforces uniqueness on
+    ``key_alias`` and returns a 400 with a message like
+    ``"Unique key aliases are required. Key alias=... already exists."``.
+    We surface that as a typed exception so the route layer can translate
+    it into a user-facing 409 with a "pick a different name" prompt
+    instead of the generic 502 used for other upstream failures.
+    """
+
+    def __init__(self, alias: str = ""):
+        self.alias = alias
+        super().__init__(f"Key alias already exists: {alias!r}")
+
+
+def _is_duplicate_alias_error(body: object) -> bool:
+    """Return True when a LiteLLM 400 response body describes a duplicate alias.
+
+    Checks both the ``{"error": {"message": ...}}`` shape used by the real
+    LiteLLM proxy exception handler and the simpler ``{"detail": ...}``
+    shape FastAPI produces directly, so the route behaves identically
+    against the real proxy and the test mock.
+    """
+    if not isinstance(body, dict):
+        return False
+    message = ""
+    err = body.get("error")
+    if isinstance(err, dict):
+        message = str(err.get("message") or "")
+    if not message:
+        message = str(body.get("detail") or body.get("message") or "")
+    msg = message.lower()
+    if "alias" not in msg:
+        return False
+    return "already exist" in msg or "unique" in msg
+
+
 class LiteLLMClient:
     """Client for LiteLLM proxy admin API. Uses the master key for auth.
 
@@ -86,13 +124,25 @@ class LiteLLMClient:
     async def generate_key(
         self, user_id: str, key_alias: str, **kwargs
     ) -> dict:
-        """POST /key/generate"""
+        """POST /key/generate
+
+        Raises :class:`DuplicateKeyAliasError` when LiteLLM rejects the
+        request because the alias is already in use. Other upstream
+        failures surface as the usual ``httpx.HTTPStatusError``.
+        """
         body = {"user_id": user_id, "key_alias": key_alias, **kwargs}
         r = await self._client().post(
             "/key/generate",
             json=body,
             headers=self._headers(),
         )
+        if r.status_code == 400:
+            try:
+                body_json = r.json()
+            except ValueError:
+                body_json = None
+            if _is_duplicate_alias_error(body_json):
+                raise DuplicateKeyAliasError(alias=key_alias)
         r.raise_for_status()
         return r.json()
 
