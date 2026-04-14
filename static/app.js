@@ -218,8 +218,17 @@ function hideCreateModal() {
 }
 
 async function createKey() {
-    var name = document.getElementById("key-name").value.trim();
+    var nameEl = document.getElementById("key-name");
+    var name = nameEl.value.trim();
     if (!name) return;
+    // The input has a pattern="[A-Za-z0-9\-]+" constraint; surface the
+    // browser's native validation message so the user knows why the
+    // submission is blocked rather than silently sending bad input the
+    // server would then have to sanitize.
+    if (!nameEl.checkValidity()) {
+        nameEl.reportValidity();
+        return;
+    }
 
     var body = {name: name};
 

@@ -211,11 +211,13 @@ async def create_key(body: CreateKeyRequest, request: Request):
         audit("rate_limited", bucket="key_create", user=user_email)
         raise HTTPException(status_code=429, detail="Too many key creations")
 
-    # Reject names that contain no alphanumeric characters before doing
-    # any upstream calls: _normalize_key_alias will sanitize the name to
-    # alphanumeric + dash, and a blank result would produce a key whose
-    # alias is just the prefix.
-    if not _sanitize_key_name(body.name):
+    # Build the canonical alias up-front and reject names whose
+    # user-portion is empty after sanitization. This catches both plain
+    # garbage (``"!!!"``) and the prefix-stripping bypass where a name
+    # like ``"alice@example.com-!!!"`` would otherwise produce an alias
+    # that is just the ``{user_email}-`` prefix.
+    key_name = _normalize_key_alias(body.name, user_email)
+    if key_name == f"{user_email}-":
         raise HTTPException(
             status_code=400,
             detail="Name must contain at least one alphanumeric character",
@@ -261,10 +263,6 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # Persist duration in metadata so we can show it in the UI
     if body.duration:
         metadata["duration"] = body.duration
-
-    # Force key alias to always start with "{user_email}-" prefix. The
-    # user-portion is sanitized to alphanumeric + dash inside the helper.
-    key_name = _normalize_key_alias(body.name, user_email)
 
     kwargs = {
         "user_id": user_email,
@@ -338,7 +336,15 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
 
     kwargs = {}
     if body.key_alias is not None:
-        kwargs["key_alias"] = _normalize_key_alias(body.key_alias, user_email)
+        new_alias = _normalize_key_alias(body.key_alias, user_email)
+        # Reject renames whose user-portion sanitizes to empty, so the
+        # stored alias can't be reduced to just the ``{user_email}-`` prefix.
+        if new_alias == f"{user_email}-":
+            raise HTTPException(
+                status_code=400,
+                detail="Name must contain at least one alphanumeric character",
+            )
+        kwargs["key_alias"] = new_alias
     if body.models is not None:
         kwargs["models"] = body.models
     if body.max_budget is not None:

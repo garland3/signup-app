@@ -646,6 +646,56 @@ async def test_create_key_rejects_name_that_sanitizes_to_empty(app):
 
     assert r.status_code == 400
     assert "alphanumeric" in r.json()["detail"].lower()
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_rejects_prefix_only_alias_bypass(app):
+    """A name whose user-portion sanitizes to empty is rejected.
+
+    Covers the bypass where the raw name contains an alphanumeric
+    ``{user_email}-`` prefix (so a naive pre-check would pass) but the
+    remainder after prefix-stripping has no alphanumeric characters.
+    Without the post-normalization guard this would create a key whose
+    alias is just ``alice@example.com-``.
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "alice@example.com-!!!"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 400
+    assert "alphanumeric" in r.json()["detail"].lower()
+    # Must be rejected before any upstream call
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_rejects_prefix_only_alias_bypass(app):
+    """PATCH must reject renames that sanitize to prefix-only, too."""
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123",
+            "token": "sk-abc123fullkey",
+            "key_alias": "alice@example.com-Original",
+            "user_id": "alice@example.com",
+            "blocked": False,
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch(
+            "/api/keys/tok_abc123",
+            json={"key_alias": "alice@example.com-!!!"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 400
+    assert "alphanumeric" in r.json()["detail"].lower()
 
 
 def test_sanitize_key_name_helper():
