@@ -209,12 +209,56 @@ function showCreateModal() {
         var el = document.getElementById("meta-" + f);
         if (el) el.value = "";
     });
+    clearCreateError();
     document.getElementById("create-modal").classList.remove("hidden");
     document.getElementById("key-name").focus();
 }
 
 function hideCreateModal() {
     document.getElementById("create-modal").classList.add("hidden");
+    clearCreateError();
+}
+
+function showCreateError(message) {
+    var el = document.getElementById("create-error");
+    if (!el) return;
+    // Use textContent so any server-supplied error string is treated as
+    // plain text and can never escape into markup.
+    el.textContent = message;
+    el.classList.remove("hidden");
+}
+
+function clearCreateError() {
+    var el = document.getElementById("create-error");
+    if (!el) return;
+    el.textContent = "";
+    el.classList.add("hidden");
+}
+
+function setCreateSubmitBusy(busy) {
+    var btn = document.getElementById("create-submit-btn");
+    var cancel = document.getElementById("create-cancel-btn");
+    if (!btn) return;
+    if (busy) {
+        btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
+        // Stash the label so we can restore it after the request lands;
+        // any text we set here is just a visible hint that the click
+        // was received and we're waiting on the server.
+        if (!btn.dataset.originalLabel) {
+            btn.dataset.originalLabel = btn.textContent;
+        }
+        btn.textContent = "Creating\u2026";
+        if (cancel) cancel.disabled = true;
+    } else {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+        if (btn.dataset.originalLabel) {
+            btn.textContent = btn.dataset.originalLabel;
+            delete btn.dataset.originalLabel;
+        }
+        if (cancel) cancel.disabled = false;
+    }
 }
 
 async function createKey() {
@@ -229,6 +273,8 @@ async function createKey() {
         nameEl.reportValidity();
         return;
     }
+
+    clearCreateError();
 
     var body = {name: name};
 
@@ -250,24 +296,44 @@ async function createKey() {
         }
     });
     if (missing.length > 0) {
-        showToast("Please fill in required fields: " + missing.join(", "), "error");
+        showCreateError("Please fill in required fields: " + missing.join(", "));
         return;
     }
     if (Object.keys(metadata).length > 0) body.metadata = metadata;
 
-    var r = await fetch(API_BASE + "/keys", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(body),
-    });
+    setCreateSubmitBusy(true);
+    var r;
+    try {
+        r = await fetch(API_BASE + "/keys", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body),
+        });
+    } catch (e) {
+        setCreateSubmitBusy(false);
+        showCreateError("Network error. Please try again.");
+        return;
+    }
 
     if (!r.ok) {
         var err = await r.json().catch(function() { return {}; });
-        showToast("Failed to create key: " + (err.detail || r.statusText), "error");
+        // 409 = duplicate key name. Keep the modal open, surface the
+        // error inline, and focus the name field so the user can pick a
+        // different name without retyping anything else.
+        if (r.status === 409) {
+            setCreateSubmitBusy(false);
+            showCreateError(err.detail || "A key with this name already exists. Please choose a different name.");
+            nameEl.focus();
+            nameEl.select();
+            return;
+        }
+        setCreateSubmitBusy(false);
+        showCreateError("Failed to create key: " + (err.detail || r.statusText));
         return;
     }
 
     var data = await r.json();
+    setCreateSubmitBusy(false);
     hideCreateModal();
 
     document.getElementById("full-key").textContent = data.key;

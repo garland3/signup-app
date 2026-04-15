@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.core.audit import audit
 from app.core.config import get_settings
-from app.core.litellm_client import LiteLLMClient
+from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
 from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -282,6 +282,20 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     try:
         result = await client.generate_key(**kwargs)
+    except DuplicateKeyAliasError:
+        # Don't echo the user-supplied name back in the message: it is
+        # untrusted input and the frontend has full control over how
+        # the error is presented. A fixed message also keeps the error
+        # body safe to render directly as textContent.
+        audit(
+            "key_create_conflict",
+            user=user_email,
+            key_alias=key_name,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="A key with this name already exists. Please choose a different name.",
+        )
     except Exception as e:
         raise _upstream_error("generate_key", e)
 

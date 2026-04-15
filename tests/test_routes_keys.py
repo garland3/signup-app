@@ -298,6 +298,110 @@ async def test_litellm_error_returns_502(app):
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_create_key_duplicate_alias_returns_409(app):
+    """LiteLLM's duplicate-alias 400 is mapped to a friendly 409.
+
+    The upstream proxy returns a ProxyException wrapped in
+    ``{"error": {"message": "... already exists."}}``; we must recognize
+    that shape and surface an actionable 409 instead of the generic 502
+    we use for other upstream failures.
+    """
+    mock_ensure_user()
+    respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": {
+                    "message": (
+                        "Unique key aliases are required. "
+                        "Key alias=alice@example.com-My-Key already exists."
+                    ),
+                    "type": "bad_request_error",
+                    "param": "key_alias",
+                    "code": "400",
+                }
+            },
+        )
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "My Key"}, headers=AUTH)
+
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    # Fixed, non-echoing message: the user-supplied name is untrusted
+    # input and must not round-trip through the error body.
+    assert "already exists" in detail.lower()
+    assert "different" in detail.lower()
+    assert "My Key" not in detail
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_duplicate_alias_detail_shape(app):
+    """Some LiteLLM versions return the error under ``detail`` instead of
+    ``error``; we should recognize that shape too."""
+    mock_ensure_user()
+    respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(
+            400,
+            json={
+                "detail": (
+                    "Unique key aliases are required. "
+                    "Key alias already exists."
+                )
+            },
+        )
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "Another"}, headers=AUTH)
+
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_other_400_still_returns_502(app):
+    """Non-duplicate 400s must still be mapped to the generic upstream
+    error so we don't accidentally surface internal details as 409s."""
+    mock_ensure_user()
+    respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(
+            400,
+            json={"error": {"message": "some unrelated validation failure"}},
+        )
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "Thing"}, headers=AUTH)
+
+    assert r.status_code == 502
+
+
+def test_is_duplicate_alias_error_helper():
+    from app.core.litellm_client import _is_duplicate_alias_error
+
+    assert _is_duplicate_alias_error(
+        {"error": {"message": "Unique key aliases are required. Key alias=x already exists."}}
+    )
+    assert _is_duplicate_alias_error(
+        {"detail": "Key alias already exists"}
+    )
+    assert _is_duplicate_alias_error(
+        {"error": {"message": "unique key alias required"}}
+    )
+    # Unrelated errors must not trigger a duplicate-alias mapping.
+    assert not _is_duplicate_alias_error(
+        {"error": {"message": "invalid model"}}
+    )
+    assert not _is_duplicate_alias_error({"detail": "budget exceeded"})
+    assert not _is_duplicate_alias_error(None)
+    assert not _is_duplicate_alias_error("plain string body")
+
+
+@pytest.mark.asyncio
 async def test_get_config(app):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.get("/api/config", headers=AUTH)
