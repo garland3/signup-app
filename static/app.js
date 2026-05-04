@@ -5,6 +5,7 @@ var appConfig = {
     max_active_keys: null,
     nav_links: [],
     show_spend: true,
+    show_budget: true,
 };
 var rootPathMeta = document.querySelector('meta[name="app-root-path"]');
 var ROOT_PATH = rootPathMeta ? rootPathMeta.getAttribute("content") : "";
@@ -17,12 +18,14 @@ async function loadConfig() {
     if (!r.ok) return;
     appConfig = await r.json();
     if (appConfig.show_spend == null) appConfig.show_spend = true;
+    if (appConfig.show_budget == null) appConfig.show_budget = true;
     var title = appConfig.app_name || "API Keys";
     document.getElementById("app-title").textContent = title;
     document.title = title;
     renderNavLinks();
     renderMetadataInputs();
     renderSpendHeader();
+    renderBudgetHeader();
     renderMetadataHeaders();
 }
 
@@ -30,6 +33,16 @@ function renderSpendHeader() {
     var th = document.getElementById("spend-col-header");
     if (!th) return;
     if (appConfig.show_spend) {
+        th.classList.remove("hidden");
+    } else {
+        th.classList.add("hidden");
+    }
+}
+
+function renderBudgetHeader() {
+    var th = document.getElementById("budget-col-header");
+    if (!th) return;
+    if (appConfig.show_budget) {
         th.classList.remove("hidden");
     } else {
         th.classList.add("hidden");
@@ -136,6 +149,13 @@ async function loadUser() {
     if (r.ok) {
         var data = await r.json();
         document.getElementById("user-email").textContent = data.email;
+        // Only OAuth sessions can be terminated by the app; in proxy mode
+        // the upstream proxy owns the session, so hide the control.
+        var logoutForm = document.getElementById("logout-form");
+        if (logoutForm && data.auth_mode === "oauth") {
+            logoutForm.action = API_BASE + "/auth/logout";
+            logoutForm.classList.remove("hidden");
+        }
     }
 }
 
@@ -182,6 +202,11 @@ function renderKeys() {
         if (appConfig.show_spend) {
             var spend = k.spend != null ? "$" + Number(k.spend).toFixed(2) : "-";
             appendCell(tr, spend);
+        }
+
+        if (appConfig.show_budget) {
+            var budget = k.max_budget != null ? "$" + Number(k.max_budget).toFixed(2) : "-";
+            appendCell(tr, budget);
         }
 
         var statusCell = document.createElement("td");

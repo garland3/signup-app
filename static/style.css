@@ -51,7 +51,13 @@ header {
     display: flex;
     justify-content: flex-end;
     align-items: center;
+    gap: 12px;
     margin-bottom: 24px;
+}
+
+.logout-form {
+    display: inline;
+    margin: 0;
 }
 
 header h1 {

@@ -412,9 +412,10 @@ async def test_get_config(app):
     assert "max_active_keys" in data
     assert "nav_links" in data
     assert data["nav_links"] == []
-    # show_spend defaults to True and is always exposed so the frontend
-    # can decide whether to render the Spend column.
+    # show_spend / show_budget default to True and are always exposed so
+    # the frontend can decide whether to render those columns.
     assert data["show_spend"] is True
+    assert data["show_budget"] is True
 
 
 @pytest.mark.asyncio
@@ -430,6 +431,21 @@ async def test_get_config_show_spend_can_be_disabled(app):
         assert r.json()["show_spend"] is False
     finally:
         s.SHOW_SPEND_COLUMN = original
+
+
+@pytest.mark.asyncio
+async def test_get_config_show_budget_can_be_disabled(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.SHOW_BUDGET_COLUMN
+    s.SHOW_BUDGET_COLUMN = False
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/api/config", headers=AUTH)
+        assert r.status_code == 200
+        assert r.json()["show_budget"] is False
+    finally:
+        s.SHOW_BUDGET_COLUMN = original
 
 
 @pytest.mark.asyncio

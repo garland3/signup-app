@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # deployments where spend tracking isn't meaningful and the column
     # would just add noise.
     SHOW_SPEND_COLUMN: bool = True
+    # Show the "Budget" column in the keys table. Independent from the
+    # Spend column so deployments can surface either, both, or neither.
+    SHOW_BUDGET_COLUMN: bool = True
 
     # Custom navigation links shown in the page header. Format is a
     # comma-separated list of "Name|URL" pairs, e.g.

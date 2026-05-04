@@ -217,6 +217,7 @@ async def get_config():
         "max_active_keys": s.MAX_ACTIVE_KEYS_PER_USER,
         "nav_links": s.nav_links,
         "show_spend": s.SHOW_SPEND_COLUMN,
+        "show_budget": s.SHOW_BUDGET_COLUMN,
     }
 
 
