@@ -26,6 +26,7 @@ def create_test_app(*, strip_user_domain: bool = False):
     from app.routes.health import router as health_router
     from app.routes.users import router as users_router
     from app.routes.keys import router as keys_router
+    from app.routes.dashboard import router as dashboard_router
 
     settings = Settings(
         DEBUG_MODE=False,
@@ -51,5 +52,6 @@ def create_test_app(*, strip_user_domain: bool = False):
     app.include_router(health_router)
     app.include_router(users_router)
     app.include_router(keys_router)
+    app.include_router(dashboard_router)
 
     return app

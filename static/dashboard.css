@@ -1,0 +1,406 @@
+/* Layout overrides for the wider dashboard view. */
+.container-wide {
+    max-width: 1180px;
+}
+
+.dash-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.dash-tabs {
+    display: flex;
+    gap: 4px;
+    background: white;
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.dash-tab {
+    padding: 6px 14px;
+    color: #4b5563;
+    text-decoration: none;
+    font-size: 14px;
+    border-radius: 6px;
+    font-weight: 500;
+}
+
+.dash-tab:hover {
+    background: #f3f4f6;
+}
+
+.dash-tab-active {
+    background: #111;
+    color: white;
+}
+
+.dash-tab-active:hover {
+    background: #111;
+}
+
+.dash-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.period-label {
+    font-size: 13px;
+    color: #6b7280;
+}
+
+.dash-controls select {
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: white;
+    font-size: 14px;
+}
+
+.user-email {
+    color: #6b7280;
+    font-size: 13px;
+}
+
+.dash-loading {
+    text-align: center;
+    color: #6b7280;
+    padding: 60px;
+    font-size: 14px;
+}
+
+.dash-section {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.dash-section h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    color: #1f2937;
+}
+
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.stat-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: #fafafa;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+}
+
+.stat-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: #111;
+}
+
+.stat-sub {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.stat-bar {
+    margin-top: 8px;
+    height: 6px;
+    background: #e5e7eb;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.stat-bar-fill {
+    height: 100%;
+    background: #2563eb;
+    width: 0;
+    transition: width 0.3s ease;
+}
+
+.stat-bar-fill.over-soft {
+    background: #f59e0b;
+}
+
+.stat-bar-fill.over-hard {
+    background: #dc2626;
+}
+
+.dash-chart-controls {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.chip-btn {
+    padding: 4px 12px;
+    font-size: 13px;
+    border: 1px solid #d1d5db;
+    background: white;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.chip-btn-active {
+    background: #111;
+    color: white;
+    border-color: #111;
+}
+
+.chart-host {
+    width: 100%;
+    height: 240px;
+    overflow: hidden;
+}
+
+.chart-host svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.chart-axis {
+    stroke: #d1d5db;
+    stroke-width: 1;
+}
+
+.chart-grid {
+    stroke: #f3f4f6;
+    stroke-width: 1;
+}
+
+.chart-line {
+    fill: none;
+    stroke: #2563eb;
+    stroke-width: 2;
+}
+
+.chart-area {
+    fill: rgba(37, 99, 235, 0.12);
+    stroke: none;
+}
+
+.chart-dot {
+    fill: #2563eb;
+}
+
+.chart-label {
+    fill: #6b7280;
+    font-size: 11px;
+    font-family: inherit;
+}
+
+.empty-state {
+    color: #9ca3af;
+    text-align: center;
+    padding: 24px;
+    font-size: 13px;
+}
+
+.dash-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.dash-table th, .dash-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 13px;
+    text-align: left;
+}
+
+.dash-table thead th {
+    background: #fafafa;
+    color: #6b7280;
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.dash-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.dash-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.projects-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.project-item {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.project-row {
+    display: grid;
+    grid-template-columns: 30px 1fr auto auto auto;
+    gap: 12px;
+    padding: 12px 14px;
+    cursor: pointer;
+    background: #fafafa;
+    align-items: center;
+}
+
+.project-row:hover {
+    background: #f3f4f6;
+}
+
+.project-row .twist {
+    color: #6b7280;
+    font-family: monospace;
+    font-size: 12px;
+    user-select: none;
+    transition: transform 0.15s ease;
+    display: inline-block;
+}
+
+.project-row.expanded .twist {
+    transform: rotate(90deg);
+}
+
+.project-name {
+    font-weight: 600;
+    color: #111;
+}
+
+.project-stat {
+    font-variant-numeric: tabular-nums;
+    color: #4b5563;
+    font-size: 13px;
+    min-width: 80px;
+    text-align: right;
+}
+
+.project-spend {
+    font-weight: 600;
+    color: #111;
+    min-width: 80px;
+    text-align: right;
+}
+
+.task-list {
+    background: white;
+    padding: 0;
+}
+
+.task-list table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.task-list td {
+    padding: 8px 12px 8px 44px;
+    font-size: 13px;
+    border-top: 1px solid #f3f4f6;
+}
+
+.task-list td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    padding-right: 14px;
+}
+
+.task-name {
+    font-family: monospace;
+    color: #4b5563;
+}
+
+.task-name.task-unattr {
+    color: #b45309;
+    font-style: italic;
+    font-family: inherit;
+}
+
+.unattributed-card {
+    margin-top: 14px;
+    border: 1px dashed #fbbf24;
+    background: #fffbeb;
+    border-radius: 10px;
+    padding: 14px 16px;
+}
+
+.unattributed-title {
+    font-weight: 600;
+    color: #92400e;
+    margin-bottom: 4px;
+}
+
+.unattributed-body {
+    font-size: 13px;
+    color: #78350f;
+    margin-bottom: 8px;
+}
+
+.unattributed-body code {
+    background: #fef3c7;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.unattributed-stats {
+    font-size: 13px;
+    color: #92400e;
+    font-variant-numeric: tabular-nums;
+}
+
+.schema-hint {
+    background: #f3f4f6;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #4b5563;
+    font-size: 12px;
+    margin-bottom: 12px;
+}
+
+.schema-hint code {
+    background: white;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.status-row-success {
+    color: #059669;
+}
+
+.status-row-error {
+    color: #dc2626;
+}
+
+@media (max-width: 600px) {
+    .dash-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .dash-controls {
+        justify-content: flex-end;
+    }
+}

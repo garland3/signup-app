@@ -206,3 +206,85 @@ class LiteLLMClient:
         )
         r.raise_for_status()
         return r.json()
+
+    async def get_user_info(self, user_id: str) -> dict | None:
+        """GET /user/info?user_id=...
+
+        Returns the full user record (budget, spend totals, attached
+        keys/teams). Distinct from :meth:`get_user` only in name; kept as
+        a separate method so the dashboard route can be wired without
+        accidentally inheriting key-management call sites.
+        """
+        r = await self._client().get(
+            "/user/info",
+            params={"user_id": user_id},
+            headers=self._headers(),
+        )
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+    async def get_spend_logs(
+        self,
+        user_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """GET /spend/logs?user_id=...&summarize=false
+
+        Returns the raw per-request spend log entries for ``user_id``.
+        ``summarize=false`` is required so we get individual rows
+        (otherwise LiteLLM aggregates by date and we lose the per-key,
+        per-model dimensions the dashboard needs).
+        """
+        params: dict[str, str] = {"user_id": user_id, "summarize": "false"}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        r = await self._client().get(
+            "/spend/logs",
+            params=params,
+            headers=self._headers(),
+        )
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        body = r.json()
+        if isinstance(body, list):
+            return body
+        if isinstance(body, dict):
+            for key in ("logs", "data", "results"):
+                value = body.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
+
+    async def get_spend_tags(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """GET /spend/tags?start_date=...&end_date=...
+
+        Returns the tag-aggregated spend report. The proxy doesn't filter
+        this by user, so callers that need per-user numbers should
+        instead aggregate from :meth:`get_spend_logs`. Provided here only
+        because the upstream endpoint is part of the documented surface.
+        """
+        params: dict[str, str] = {}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        r = await self._client().get(
+            "/spend/tags",
+            params=params,
+            headers=self._headers(),
+        )
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        body = r.json()
+        return body if isinstance(body, list) else []

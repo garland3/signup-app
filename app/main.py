@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.middleware import AuthMiddleware
 from app.core.sessions import InMemorySessionMiddleware
 from app.routes.auth import router as auth_router
+from app.routes.dashboard import router as dashboard_router
 from app.routes.health import router as health_router
 from app.routes.users import router as users_router
 from app.routes.keys import router as keys_router
@@ -24,6 +25,7 @@ NO_STORE_PATHS = (
     "/api/keys",
     "/api/config",
     "/api/auth/",
+    "/api/dashboard",
 )
 
 
@@ -158,6 +160,7 @@ def create_app():
     app.include_router(auth_router, prefix=root_path)
     app.include_router(users_router, prefix=root_path)
     app.include_router(keys_router, prefix=root_path)
+    app.include_router(dashboard_router, prefix=root_path)
 
     if STATIC_DIR.exists():
         app.mount(
@@ -173,6 +176,16 @@ def create_app():
         @app.get(f"{root_path}/")
         async def serve_frontend():
             return HTMLResponse(index_html)
+
+        dashboard_path = STATIC_DIR / "dashboard.html"
+        if dashboard_path.exists():
+            dashboard_html = dashboard_path.read_text().replace(
+                "{{ROOT_PATH}}", root_path
+            )
+
+            @app.get(f"{root_path}/dashboard")
+            async def serve_dashboard():
+                return HTMLResponse(dashboard_html)
 
         if root_path:
             # Direct visits to the container root redirect to the prefix

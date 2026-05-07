@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="app-root-path" content="{{ROOT_PATH}}">
+    <title>Usage Dashboard</title>
+    <link rel="stylesheet" href="{{ROOT_PATH}}/static/style.css">
+    <link rel="stylesheet" href="{{ROOT_PATH}}/static/dashboard.css">
+</head>
+<body>
+    <div class="container container-wide">
+        <h1 id="app-title" class="app-title">Usage Dashboard</h1>
+        <nav id="nav-links" class="nav-links hidden"></nav>
+
+        <header class="dash-header">
+            <div class="dash-tabs">
+                <a id="link-keys" class="dash-tab" href="{{ROOT_PATH}}/">API Keys</a>
+                <a id="link-dash" class="dash-tab dash-tab-active" href="{{ROOT_PATH}}/dashboard">Usage</a>
+            </div>
+            <div class="dash-controls">
+                <label for="period-select" class="period-label">Period</label>
+                <select id="period-select">
+                    <option value="7">Last 7 days</option>
+                    <option value="30" selected>Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                    <option value="365">Last 365 days</option>
+                </select>
+                <span id="user-email" class="user-email"></span>
+            </div>
+        </header>
+
+        <div id="dash-loading" class="dash-loading">Loading usage data...</div>
+        <div id="dash-error" class="form-error hidden" role="alert"></div>
+
+        <main id="dash-content" class="hidden">
+            <!-- Budget posture -->
+            <section class="dash-section" aria-labelledby="budget-heading">
+                <h2 id="budget-heading">Budget</h2>
+                <div class="card-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total spend (lifetime)</div>
+                        <div class="stat-value" id="budget-spend">$0.00</div>
+                        <div class="stat-sub" id="budget-period-spend">$0.00 in current period</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Max budget</div>
+                        <div class="stat-value" id="budget-max">--</div>
+                        <div class="stat-sub" id="budget-duration"></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Remaining</div>
+                        <div class="stat-value" id="budget-remaining">--</div>
+                        <div class="stat-sub" id="budget-reset"></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Consumed</div>
+                        <div class="stat-value" id="budget-pct">--</div>
+                        <div class="stat-bar"><div class="stat-bar-fill" id="budget-bar"></div></div>
+                    </div>
+                </div>
+                <div id="budget-soft-warning" class="warning hidden">
+                    Soft budget threshold reached. Consider reducing usage before the hard limit.
+                </div>
+            </section>
+
+            <!-- Token / request totals -->
+            <section class="dash-section" aria-labelledby="totals-heading">
+                <h2 id="totals-heading">Usage totals</h2>
+                <div class="card-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total tokens</div>
+                        <div class="stat-value" id="totals-tokens">0</div>
+                        <div class="stat-sub" id="totals-period-tokens">0 in current period</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Prompt vs. completion</div>
+                        <div class="stat-value" id="totals-pc-ratio">--</div>
+                        <div class="stat-sub" id="totals-pc-detail"></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total requests</div>
+                        <div class="stat-value" id="totals-requests">0</div>
+                        <div class="stat-sub" id="totals-success">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Tokens / request</div>
+                        <div class="stat-value" id="totals-tpr-avg">--</div>
+                        <div class="stat-sub" id="totals-tpr-pct">p50/p95: -- / --</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Time series -->
+            <section class="dash-section" aria-labelledby="ts-heading">
+                <h2 id="ts-heading">Usage over time</h2>
+                <div class="dash-chart-controls">
+                    <button id="ts-metric-spend" class="chip-btn chip-btn-active" type="button">Spend</button>
+                    <button id="ts-metric-tokens" class="chip-btn" type="button">Tokens</button>
+                    <button id="ts-metric-requests" class="chip-btn" type="button">Requests</button>
+                </div>
+                <div id="ts-chart" class="chart-host" aria-label="Daily usage time series"></div>
+                <p id="ts-empty" class="empty-state hidden">No spend logs in this window.</p>
+            </section>
+
+            <!-- Model breakdown -->
+            <section class="dash-section" aria-labelledby="models-heading">
+                <h2 id="models-heading">Model breakdown</h2>
+                <table class="dash-table">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th class="num">Requests</th>
+                            <th class="num">Tokens</th>
+                            <th class="num">Spend</th>
+                            <th class="num">$/1K tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody id="models-body"></tbody>
+                </table>
+            </section>
+
+            <!-- Key breakdown -->
+            <section class="dash-section" aria-labelledby="keys-heading">
+                <h2 id="keys-heading">API key breakdown</h2>
+                <table class="dash-table">
+                    <thead>
+                        <tr>
+                            <th>Key alias</th>
+                            <th>Prefix</th>
+                            <th class="num">Requests</th>
+                            <th class="num">Tokens</th>
+                            <th class="num">Spend</th>
+                        </tr>
+                    </thead>
+                    <tbody id="keys-body"></tbody>
+                </table>
+            </section>
+
+            <!-- Project / task -->
+            <section class="dash-section" aria-labelledby="projects-heading">
+                <h2 id="projects-heading">Project / task breakdown</h2>
+                <p class="schema-hint" id="schema-hint"></p>
+                <div id="projects-tree" class="projects-tree"></div>
+                <div id="unattributed-card" class="unattributed-card hidden">
+                    <div class="unattributed-title">Unattributed</div>
+                    <div class="unattributed-body">
+                        Requests with no Project tag (or a malformed Task-only tag) are
+                        rolled up here. Tag your traffic with
+                        <code>project:&lt;n&gt;</code> and <code>task:&lt;n.n.n&gt;</code>
+                        to break this out.
+                    </div>
+                    <div class="unattributed-stats" id="unattributed-stats"></div>
+                </div>
+            </section>
+
+            <!-- Status codes -->
+            <section class="dash-section" aria-labelledby="status-heading">
+                <h2 id="status-heading">Request status</h2>
+                <table class="dash-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th class="num">Count</th>
+                            <th class="num">% of total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="status-body"></tbody>
+                </table>
+            </section>
+        </main>
+    </div>
+
+    <script src="{{ROOT_PATH}}/static/dashboard.js"></script>
+</body>
+</html>

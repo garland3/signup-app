@@ -49,16 +49,39 @@ body {
 
 header {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
     gap: 12px;
     margin-bottom: 24px;
+    flex-wrap: wrap;
 }
 
 .logout-form {
     display: inline;
     margin: 0;
 }
+
+.page-tabs {
+    display: inline-flex;
+    gap: 4px;
+    background: white;
+    padding: 4px;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.page-tab {
+    padding: 6px 14px;
+    color: #4b5563;
+    text-decoration: none;
+    font-size: 14px;
+    border-radius: 6px;
+    font-weight: 500;
+}
+
+.page-tab:hover { background: #f3f4f6; }
+.page-tab-active { background: #111; color: white; }
+.page-tab-active:hover { background: #111; }
 
 header h1 {
     font-size: 24px;
