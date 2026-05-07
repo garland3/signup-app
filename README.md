@@ -1,6 +1,18 @@
 # Signup App
 
-API key management UI backed by LiteLLM proxy. Authenticated users can create, view, and delete API keys through a clean web interface.
+API key management UI backed by LiteLLM proxy. Authenticated users can create, view, and delete API keys, and inspect their spend, token usage, and budget posture against a project/task hierarchy.
+
+![API Keys page](docs/images/keys-page.png)
+
+## Usage Dashboard
+
+Per-user accounting view: budget cards, lifetime/current-period totals,
+daily time series, model and API-key breakdowns, and a Project/Task
+drill-down driven by `request_tags`. See
+[docs/2026-05-07-usage-dashboard.md](docs/2026-05-07-usage-dashboard.md)
+for the full schema and tag conventions.
+
+![Usage dashboard](docs/images/dashboard-overview.png)
 
 ## Tech Stack
 
@@ -113,6 +125,7 @@ prefix (e.g. `https://mydomain.com/start/api/auth/callback`).
 | POST | `/api/keys` | Yes | Create key (full key returned once) |
 | PATCH | `/api/keys/{token}` | Yes | Update key settings |
 | DELETE | `/api/keys/{token}` | Yes | Delete key |
+| GET | `/api/dashboard` | Yes | Aggregated usage/spend payload |
 
 ## Mock LiteLLM Server
 
