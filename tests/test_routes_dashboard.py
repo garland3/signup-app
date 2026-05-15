@@ -303,6 +303,152 @@ async def test_dashboard_follows_pagination(app):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_dashboard_drops_foreign_api_keys_from_response(app):
+    """If LiteLLM returns a global rollup despite the user_id filter,
+    the dashboard must drop api_keys that don't belong to the caller
+    and recompute totals from what's left.
+
+    Reproduces the production symptom that prompted this guard: the
+    proxy's per-user filter sometimes fails to apply, returning a
+    rollup that includes other users' keys. The dashboard should
+    self-correct rather than surface inflated numbers.
+    """
+    today = datetime.now(timezone.utc).date()
+    response = {
+        "results": [{
+            "date": today.isoformat(),
+            "metrics": _metrics(
+                spend=5.00, prompt_tokens=1000, completion_tokens=500,
+                api_requests=10,
+            ),
+            "breakdown": {
+                "models": {
+                    "gpt-4o": {
+                        "metrics": _metrics(
+                            spend=5.00, prompt_tokens=1000,
+                            completion_tokens=500, api_requests=10,
+                        ),
+                        "metadata": {},
+                        "api_key_breakdown": {
+                            "sk-mine1111aaaaaaaa": {
+                                "metrics": _metrics(
+                                    spend=0.50, prompt_tokens=100,
+                                    completion_tokens=50, api_requests=1,
+                                ),
+                                "metadata": {"key_alias": "alice-prod"},
+                            },
+                            "sk-other2222zzzzzzzz": {
+                                "metrics": _metrics(
+                                    spend=4.50, prompt_tokens=900,
+                                    completion_tokens=450, api_requests=9,
+                                ),
+                                "metadata": {"key_alias": "bob-prod"},
+                            },
+                        },
+                    },
+                },
+                "api_keys": {
+                    "sk-mine1111aaaaaaaa": {
+                        "metrics": _metrics(
+                            spend=0.50, prompt_tokens=100,
+                            completion_tokens=50, api_requests=1,
+                        ),
+                        "metadata": {"key_alias": "alice-prod"},
+                    },
+                    "sk-other2222zzzzzzzz": {
+                        "metrics": _metrics(
+                            spend=4.50, prompt_tokens=900,
+                            completion_tokens=450, api_requests=9,
+                        ),
+                        "metadata": {"key_alias": "bob-prod"},
+                    },
+                },
+                "providers": {},
+            },
+        }],
+        "metadata": {"page": 1, "total_pages": 1, "has_more": False},
+    }
+    respx.get(f"{LITELLM}/user/daily/activity").mock(
+        return_value=Response(200, json=response)
+    )
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(200, json={"user_id": "alice@example.com"})
+    )
+    respx.get(f"{LITELLM}/key/list").mock(
+        return_value=Response(200, json=[
+            {"token": "sk-mine1111aaaaaaaa", "key_alias": "alice-prod"},
+        ])
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/dashboard?period_days=7", headers=AUTH)
+    assert r.status_code == 200
+    data = r.json()
+
+    # Only the user's own key should appear in the breakdown.
+    keys = {k["key"]: k for k in data["keys"]}
+    assert set(keys) == {"sk-mine1111aaaaaaaa"}
+
+    # Totals are recomputed from the surviving key, not the inflated
+    # global rollup.
+    assert data["lifetime"]["spend"] == pytest.approx(0.50)
+    assert data["lifetime"]["requests"] == 1
+    assert data["lifetime"]["total_tokens"] == 150
+
+    # The model breakdown should likewise be recomputed.
+    models = {m["key"]: m for m in data["models"]}
+    assert models["gpt-4o"]["spend"] == pytest.approx(0.50)
+    assert models["gpt-4o"]["requests"] == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_dashboard_foreign_filter_matches_masked_key_prefixes(app):
+    """``/key/list`` masks tokens (``sk-abc12345...``) while the
+    daily-activity breakdown uses the full token. The foreign-key
+    filter must treat the masked form as a prefix match so the user's
+    own keys aren't accidentally dropped.
+    """
+    today = datetime.now(timezone.utc).date()
+    response = {
+        "results": [{
+            "date": today.isoformat(),
+            "metrics": _metrics(spend=0.10, api_requests=1),
+            "breakdown": {
+                "models": {},
+                "api_keys": {
+                    "sk-mine111full2222token": {
+                        "metrics": _metrics(spend=0.10, api_requests=1),
+                        "metadata": {"key_alias": "alice-prod"},
+                    },
+                },
+                "providers": {},
+            },
+        }],
+        "metadata": {"page": 1, "total_pages": 1, "has_more": False},
+    }
+    respx.get(f"{LITELLM}/user/daily/activity").mock(
+        return_value=Response(200, json=response)
+    )
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(200, json={"user_id": "alice@example.com"})
+    )
+    respx.get(f"{LITELLM}/key/list").mock(
+        return_value=Response(200, json=[
+            {"token": "sk-mine1...", "key_alias": "alice-prod"},
+        ])
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/dashboard?period_days=7", headers=AUTH)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["lifetime"]["spend"] == pytest.approx(0.10)
+    assert len(data["keys"]) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_dashboard_period_days_validated(app):
     respx.get(f"{LITELLM}/user/daily/activity").mock(
         return_value=Response(200, json={"results": [], "metadata": {}})
