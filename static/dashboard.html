@@ -86,7 +86,7 @@
                     <div class="stat-card">
                         <div class="stat-label">Tokens / request</div>
                         <div class="stat-value" id="totals-tpr-avg">--</div>
-                        <div class="stat-sub" id="totals-tpr-pct">p50/p95: -- / --</div>
+                        <div class="stat-sub" id="totals-tpr-pct"></div>
                     </div>
                 </div>
             </section>
@@ -135,23 +135,6 @@
                     </thead>
                     <tbody id="keys-body"></tbody>
                 </table>
-            </section>
-
-            <!-- Project / task -->
-            <section class="dash-section" aria-labelledby="projects-heading">
-                <h2 id="projects-heading">Project / task breakdown</h2>
-                <p class="schema-hint" id="schema-hint"></p>
-                <div id="projects-tree" class="projects-tree"></div>
-                <div id="unattributed-card" class="unattributed-card hidden">
-                    <div class="unattributed-title">Unattributed</div>
-                    <div class="unattributed-body">
-                        Requests with no Project tag (or a malformed Task-only tag) are
-                        rolled up here. Tag your traffic with
-                        <code>project:&lt;n&gt;</code> and <code>task:&lt;n.n.n&gt;</code>
-                        to break this out.
-                    </div>
-                    <div class="unattributed-stats" id="unattributed-stats"></div>
-                </div>
             </section>
 
             <!-- Status codes -->

@@ -1,183 +1,203 @@
 """Unit tests for the dashboard aggregation pipeline.
 
-Tests focus on the rules that distinguish the dashboard from a generic
-"sum of spend logs" tally:
+The aggregator consumes LiteLLM's ``/user/daily/activity`` response —
+one entry per day with per-model and per-api_key sub-totals already
+rolled up. These tests cover:
 
-- Project / Task tag parsing, including the malformed-task-only case
-  that has to land in the unattributed bucket.
-- Budget posture: derived ``remaining`` and ``consumed_pct`` plus the
-  soft-threshold flag.
-- Tokens-per-request percentile math.
-- Time-series gap-fill.
-- Status code classification (explicit metadata wins over heuristic).
+- Lifetime and current-period totals (and the window filter that
+  separates them).
+- Per-model and per-key breakdowns, including the alias backfill from
+  ``/key/list`` when the proxy doesn't supply one.
+- Status code projection (success/failure counts → ``200``/``error``
+  buckets).
+- Budget posture (``remaining``, ``consumed_pct``, soft threshold).
+- Time-series gap-fill (zero-filled days inside the span).
 """
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.dashboard_metrics import (
-    UNATTRIBUTED,
-    _parse_tags,
-    _percentile,
-    aggregate,
-    build_budget,
-)
+from app.core.dashboard_metrics import aggregate, build_budget
 
 
-def _row(**overrides):
-    """Build a spend log row with sensible defaults."""
-    base = {
-        "request_id": "req-test",
-        "api_key": "sk-test1234567890",
-        "model": "gpt-4o",
-        "spend": 0.01,
-        "prompt_tokens": 100,
-        "completion_tokens": 50,
-        "total_tokens": 150,
-        "startTime": datetime.now(timezone.utc).isoformat(),
-        "user": "alice@example.com",
-        "metadata": {"status": "success", "status_code": 200},
-        "request_tags": [],
+def _metrics(
+    spend=0.0,
+    prompt_tokens=0,
+    completion_tokens=0,
+    total_tokens=None,
+    api_requests=0,
+    successful_requests=None,
+    failed_requests=0,
+):
+    if total_tokens is None:
+        total_tokens = prompt_tokens + completion_tokens
+    if successful_requests is None:
+        successful_requests = max(0, api_requests - failed_requests)
+    return {
+        "spend": spend,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "api_requests": api_requests,
+        "successful_requests": successful_requests,
+        "failed_requests": failed_requests,
     }
-    base.update(overrides)
-    return base
+
+
+def _day(date_str, metrics, *, models=None, api_keys=None):
+    return {
+        "date": date_str,
+        "metrics": metrics,
+        "breakdown": {
+            "models": models or {},
+            "api_keys": api_keys or {},
+            "providers": {},
+        },
+    }
+
+
+def _activity(results, *, total_pages=1, has_more=False):
+    return {
+        "results": results,
+        "metadata": {
+            "page": 1,
+            "total_pages": total_pages,
+            "has_more": has_more,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
-# Tag parsing
+# Totals + per-dimension breakdowns
 # ---------------------------------------------------------------------------
 
 
-def test_parse_tags_recognises_explicit_project_and_task():
-    p, t = _parse_tags(["project:1042", "task:3.1.2"])
-    assert p == "1042"
-    assert t == "3.1.2"
-
-
-def test_parse_tags_accepts_human_friendly_form_with_spaces():
-    p, t = _parse_tags(["Project: 1042", "Task: 3.1"])
-    assert p == "1042"
-    assert t == "3.1"
-
-
-def test_parse_tags_rejects_unrecognised_strings():
-    p, t = _parse_tags(["random", "env=prod"])
-    assert p is None
-    assert t is None
-
-
-def test_parse_tags_handles_json_string_payload():
-    # LiteLLM sometimes serializes request_tags as a JSON-encoded list.
-    p, t = _parse_tags('["project:7", "task:2.1"]')
-    assert p == "7"
-    assert t == "2.1"
-
-
-def test_parse_tags_only_first_match_wins():
-    p, t = _parse_tags(["project:1", "project:2", "task:1.1", "task:2.2"])
-    assert p == "1"
-    assert t == "1.1"
-
-
-def test_parse_tags_rejects_four_part_task():
-    # Task must be at most 3 dotted components.
-    p, t = _parse_tags(["project:1", "task:1.2.3.4"])
-    assert p == "1"
-    assert t is None
-
-
-# ---------------------------------------------------------------------------
-# Project / task aggregation
-# ---------------------------------------------------------------------------
-
-
-def test_aggregate_groups_by_project_and_drills_down_into_tasks():
-    rows = [
-        _row(spend=1.0, total_tokens=100, request_tags=["project:1042", "task:3.1.2"]),
-        _row(spend=2.0, total_tokens=200, request_tags=["project:1042", "task:3.1.2"]),
-        _row(spend=4.0, total_tokens=400, request_tags=["project:1042", "task:3.2"]),
-        _row(spend=8.0, total_tokens=800, request_tags=["project:2001", "task:1.1"]),
+def test_aggregate_sums_lifetime_totals_across_days():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(spend=0.30, prompt_tokens=200, completion_tokens=100, api_requests=2),
+        ),
+        _day(
+            (today - timedelta(days=1)).isoformat(),
+            _metrics(
+                spend=0.10, prompt_tokens=100, completion_tokens=50,
+                api_requests=2, failed_requests=1,
+            ),
+        ),
     ]
-    out = aggregate(user_info=None, spend_logs=rows)
-    projects = {p["project"]: p for p in out["projects"]}
-
-    assert "1042" in projects
-    assert "2001" in projects
-    assert projects["1042"]["spend"] == pytest.approx(7.0)
-    assert projects["1042"]["requests"] == 3
-    assert projects["2001"]["spend"] == pytest.approx(8.0)
-
-    tasks_1042 = {t["task"]: t for t in projects["1042"]["tasks"]}
-    assert tasks_1042["3.1.2"]["spend"] == pytest.approx(3.0)
-    assert tasks_1042["3.1.2"]["requests"] == 2
-    assert tasks_1042["3.2"]["spend"] == pytest.approx(4.0)
-
-
-def test_aggregate_orphan_task_falls_into_unattributed():
-    # A task tag without a project tag is malformed and must NOT create
-    # a phantom project bucket. It rolls into Unattributed instead so
-    # the user sees their tagging gap.
-    rows = [
-        _row(spend=5.0, request_tags=["task:5.1"]),
-        _row(spend=3.0, request_tags=["project:1042", "task:3.1"]),
-    ]
-    out = aggregate(user_info=None, spend_logs=rows)
-    project_ids = [p["project"] for p in out["projects"]]
-    assert project_ids == ["1042"]
-    assert out["unattributed"]["spend"] == pytest.approx(5.0)
-    assert out["unattributed"]["requests"] == 1
-
-
-def test_aggregate_no_tags_at_all_is_unattributed():
-    rows = [_row(spend=2.0, request_tags=[])]
-    out = aggregate(user_info=None, spend_logs=rows)
-    assert out["projects"] == []
-    assert out["unattributed"]["spend"] == pytest.approx(2.0)
-
-
-def test_aggregate_project_without_task_lists_placeholder_task():
-    rows = [_row(spend=1.0, request_tags=["project:99"])]
-    out = aggregate(user_info=None, spend_logs=rows)
-    assert len(out["projects"]) == 1
-    tasks = out["projects"][0]["tasks"]
-    assert len(tasks) == 1
-    assert tasks[0]["task"] == UNATTRIBUTED
-
-
-# ---------------------------------------------------------------------------
-# Per-model and per-key breakdowns
-# ---------------------------------------------------------------------------
+    out = aggregate(
+        user_info=None, daily_activity=_activity(results), period_days=30
+    )
+    assert out["lifetime"]["spend"] == pytest.approx(0.40)
+    assert out["lifetime"]["total_tokens"] == 450
+    assert out["lifetime"]["requests"] == 4
+    assert out["lifetime"]["successful_requests"] == 3
+    assert out["lifetime"]["failed_requests"] == 1
 
 
 def test_aggregate_breaks_down_by_model_with_cost_per_token():
-    rows = [
-        _row(model="gpt-4o", spend=0.10, total_tokens=1000),
-        _row(model="gpt-4o", spend=0.20, total_tokens=2000),
-        _row(model="claude-3-5-sonnet", spend=0.15, total_tokens=500),
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(spend=0.45, prompt_tokens=200, completion_tokens=100, api_requests=3),
+            models={
+                "gpt-4o": {
+                    "metrics": _metrics(
+                        spend=0.30, prompt_tokens=200, completion_tokens=100,
+                        total_tokens=3000, api_requests=2,
+                    ),
+                    "metadata": {},
+                },
+                "claude-3-5-sonnet": {
+                    "metrics": _metrics(
+                        spend=0.15, total_tokens=500, api_requests=1,
+                    ),
+                    "metadata": {},
+                },
+            },
+        )
     ]
-    out = aggregate(user_info=None, spend_logs=rows)
+    out = aggregate(user_info=None, daily_activity=_activity(results))
     by_model = {m["key"]: m for m in out["models"]}
     assert by_model["gpt-4o"]["spend"] == pytest.approx(0.30)
     assert by_model["gpt-4o"]["total_tokens"] == 3000
     assert by_model["gpt-4o"]["cost_per_token"] == pytest.approx(0.0001)
-    assert by_model["claude-3-5-sonnet"]["cost_per_token"] == pytest.approx(0.0003)
     # Sorted by spend descending.
     assert out["models"][0]["key"] == "gpt-4o"
 
 
-def test_aggregate_keys_breakdown_uses_alias_when_available():
-    rows = [
-        _row(api_key="sk-realkey1234", spend=0.5, total_tokens=100),
-        _row(api_key="sk-realkey1234", spend=1.5, total_tokens=200),
+def test_aggregate_keys_breakdown_uses_alias_from_breakdown_metadata():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(spend=2.0, total_tokens=300, api_requests=2),
+            api_keys={
+                "sk-realkey1234": {
+                    "metrics": _metrics(spend=2.0, total_tokens=300, api_requests=2),
+                    "metadata": {"key_alias": "alice-prod"},
+                }
+            },
+        )
     ]
-    keys_list = [{"token": "sk-realkey1234", "key_alias": "alice-prod"}]
-    out = aggregate(user_info=None, spend_logs=rows, keys_list=keys_list)
+    out = aggregate(user_info=None, daily_activity=_activity(results))
     assert len(out["keys"]) == 1
     entry = out["keys"][0]
     assert entry["alias"] == "alice-prod"
     assert entry["spend"] == pytest.approx(2.0)
     assert entry["requests"] == 2
+    assert entry["key_prefix"] == "sk-realk..."
+
+
+def test_aggregate_keys_backfills_alias_from_key_list_when_missing():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(spend=1.0, api_requests=1),
+            api_keys={
+                "sk-realkey1234": {
+                    "metrics": _metrics(spend=1.0, api_requests=1),
+                    "metadata": {},
+                }
+            },
+        )
+    ]
+    keys_list = [{"token": "sk-realkey1234", "key_alias": "alice-prod"}]
+    out = aggregate(
+        user_info=None, daily_activity=_activity(results), keys_list=keys_list,
+    )
+    assert out["keys"][0]["alias"] == "alice-prod"
+
+
+# ---------------------------------------------------------------------------
+# Status code projection
+# ---------------------------------------------------------------------------
+
+
+def test_status_codes_project_success_and_failure_counts():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(api_requests=5, failed_requests=2),
+        )
+    ]
+    out = aggregate(user_info=None, daily_activity=_activity(results))
+    assert out["status_codes"] == {"200": 3, "error": 2}
+
+
+def test_status_codes_omit_zero_buckets():
+    today = datetime.now(timezone.utc).date()
+    results = [_day(today.isoformat(), _metrics(api_requests=3))]
+    out = aggregate(user_info=None, daily_activity=_activity(results))
+    assert out["status_codes"] == {"200": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -219,45 +239,20 @@ def test_build_budget_handles_none_input():
 
 
 # ---------------------------------------------------------------------------
-# Tokens per request percentiles
-# ---------------------------------------------------------------------------
-
-
-def test_percentile_basic():
-    assert _percentile([], 50) == 0.0
-    assert _percentile([100], 50) == 100.0
-    assert _percentile([10, 20, 30, 40, 50], 50) == 30.0
-    assert _percentile([10, 20, 30, 40, 50], 95) == 50.0
-
-
-def test_aggregate_tokens_per_request_only_counts_successful_token_volumes():
-    # Zero-token rows (errors with no tokens) shouldn't drag the average
-    # toward zero — they're not useful samples for the avg/p50/p95.
-    rows = [
-        _row(total_tokens=100),
-        _row(total_tokens=200),
-        _row(total_tokens=300),
-        _row(total_tokens=0, spend=0, metadata={"status": "failure"}),
-    ]
-    out = aggregate(user_info=None, spend_logs=rows)
-    tpr = out["tokens_per_request"]
-    assert tpr["avg"] == pytest.approx(200.0)
-    assert tpr["p50"] == 200.0
-
-
-# ---------------------------------------------------------------------------
 # Time series gap-fill
 # ---------------------------------------------------------------------------
 
 
 def test_time_series_fills_in_missing_days():
-    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
-    rows = [
-        _row(spend=1.0, total_tokens=100, startTime=base.isoformat()),
-        _row(spend=2.0, total_tokens=200,
-             startTime=(base + timedelta(days=3)).isoformat()),
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc).date()
+    results = [
+        _day(base.isoformat(), _metrics(spend=1.0, total_tokens=100, api_requests=1)),
+        _day(
+            (base + timedelta(days=3)).isoformat(),
+            _metrics(spend=2.0, total_tokens=200, api_requests=1),
+        ),
     ]
-    out = aggregate(user_info=None, spend_logs=rows)
+    out = aggregate(user_info=None, daily_activity=_activity(results))
     series = out["time_series"]
     assert [p["date"] for p in series] == [
         "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04",
@@ -268,47 +263,45 @@ def test_time_series_fills_in_missing_days():
 
 
 # ---------------------------------------------------------------------------
-# Status code classification
+# Period window filter
 # ---------------------------------------------------------------------------
 
 
-def test_status_codes_explicit_code_wins():
-    rows = [
-        _row(metadata={"status_code": 200}),
-        _row(metadata={"status_code": 200}),
-        _row(metadata={"status_code": 429}),
-        _row(metadata={"status_code": 500}),
+def test_current_period_filters_by_trailing_window():
+    now = datetime.now(timezone.utc).date()
+    results = [
+        _day((now - timedelta(days=1)).isoformat(), _metrics(spend=1.0, api_requests=1)),
+        _day((now - timedelta(days=10)).isoformat(), _metrics(spend=2.0, api_requests=1)),
+        _day((now - timedelta(days=60)).isoformat(), _metrics(spend=4.0, api_requests=1)),
     ]
-    out = aggregate(user_info=None, spend_logs=rows)
-    assert out["status_codes"]["200"] == 2
-    assert out["status_codes"]["429"] == 1
-    assert out["status_codes"]["500"] == 1
-    assert out["lifetime"]["successful_requests"] == 2
-    assert out["lifetime"]["failed_requests"] == 2
-
-
-def test_status_codes_falls_back_to_status_string():
-    rows = [
-        _row(metadata={"status": "failure"}, spend=0, total_tokens=0),
-        _row(metadata={"status": "success"}),
-    ]
-    out = aggregate(user_info=None, spend_logs=rows)
-    assert out["status_codes"]["error"] == 1
-    assert out["status_codes"]["200"] == 1
-
-
-# ---------------------------------------------------------------------------
-# Period filtering
-# ---------------------------------------------------------------------------
-
-
-def test_current_period_only_includes_recent_rows():
-    now = datetime.now(timezone.utc)
-    rows = [
-        _row(spend=1.0, startTime=(now - timedelta(days=1)).isoformat()),
-        _row(spend=2.0, startTime=(now - timedelta(days=10)).isoformat()),
-        _row(spend=4.0, startTime=(now - timedelta(days=60)).isoformat()),
-    ]
-    out = aggregate(user_info=None, spend_logs=rows, period_days=30)
+    out = aggregate(
+        user_info=None, daily_activity=_activity(results), period_days=30
+    )
     assert out["lifetime"]["spend"] == pytest.approx(7.0)
     assert out["current_period"]["spend"] == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# Tokens per request
+# ---------------------------------------------------------------------------
+
+
+def test_tokens_per_request_uses_total_tokens_over_requests():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(today.isoformat(), _metrics(total_tokens=600, api_requests=4)),
+    ]
+    out = aggregate(user_info=None, daily_activity=_activity(results))
+    assert out["tokens_per_request"]["avg"] == pytest.approx(150.0)
+    # Percentiles aren't recoverable from a daily rollup.
+    assert out["tokens_per_request"]["p50"] is None
+    assert out["tokens_per_request"]["p95"] is None
+
+
+def test_aggregate_handles_empty_activity():
+    out = aggregate(user_info=None, daily_activity=None)
+    assert out["lifetime"]["requests"] == 0
+    assert out["models"] == []
+    assert out["keys"] == []
+    assert out["status_codes"] == {}
+    assert out["time_series"] == []

@@ -117,9 +117,7 @@ function render() {
     renderTimeSeries(d);
     renderModels(d);
     renderKeys(d);
-    renderProjects(d);
     renderStatusCodes(d);
-    renderSchemaHint(d);
 }
 
 function renderBudget(d) {
@@ -186,9 +184,7 @@ function renderTotals(d) {
         s + " ok / " + f + " failed (" + successPct + "% success)";
 
     $("totals-tpr-avg").textContent = fmtInt(Math.round(tpr.avg || 0));
-    $("totals-tpr-pct").textContent =
-        "p50/p95: " + fmtInt(Math.round(tpr.p50 || 0)) +
-        " / " + fmtInt(Math.round(tpr.p95 || 0));
+    $("totals-tpr-pct").textContent = "average across all requests";
 }
 
 function renderTimeSeries(d) {
@@ -367,107 +363,6 @@ function renderKeys(d) {
     });
 }
 
-function renderProjects(d) {
-    var host = $("projects-tree");
-    host.textContent = "";
-    var projects = d.projects || [];
-    if (!projects.length) {
-        var p = document.createElement("p");
-        p.className = "empty-state";
-        p.textContent = "No tagged usage yet.";
-        host.appendChild(p);
-    } else {
-        projects.forEach(function(proj) {
-            host.appendChild(buildProjectItem(proj));
-        });
-    }
-
-    var unattr = d.unattributed || {};
-    var card = $("unattributed-card");
-    if ((unattr.requests || 0) > 0) {
-        card.classList.remove("hidden");
-        $("unattributed-stats").textContent =
-            fmtInt(unattr.requests) + " requests, " +
-            fmtInt(unattr.total_tokens) + " tokens, " +
-            fmtMoney(unattr.spend) + " spent";
-    } else {
-        card.classList.add("hidden");
-    }
-}
-
-function buildProjectItem(proj) {
-    var wrap = document.createElement("div");
-    wrap.className = "project-item";
-
-    var row = document.createElement("div");
-    row.className = "project-row";
-
-    var twist = document.createElement("span");
-    twist.className = "twist";
-    twist.textContent = ">";
-    row.appendChild(twist);
-
-    var name = document.createElement("span");
-    name.className = "project-name";
-    name.textContent = "Project " + proj.project;
-    row.appendChild(name);
-
-    var reqs = document.createElement("span");
-    reqs.className = "project-stat";
-    reqs.textContent = fmtInt(proj.requests) + " req";
-    row.appendChild(reqs);
-
-    var toks = document.createElement("span");
-    toks.className = "project-stat";
-    toks.textContent = fmtInt(proj.total_tokens) + " tok";
-    row.appendChild(toks);
-
-    var spend = document.createElement("span");
-    spend.className = "project-spend";
-    spend.textContent = fmtMoney(proj.spend);
-    row.appendChild(spend);
-
-    var taskHost = document.createElement("div");
-    taskHost.className = "task-list hidden";
-
-    var table = document.createElement("table");
-    var tbody = document.createElement("tbody");
-    (proj.tasks || []).forEach(function(t) {
-        var tr = document.createElement("tr");
-        var td1 = document.createElement("td");
-        var span = document.createElement("span");
-        span.className = "task-name";
-        if (t.task === "Unattributed") {
-            span.classList.add("task-unattr");
-            span.textContent = "(no task tag)";
-        } else {
-            span.textContent = "Task " + t.task;
-        }
-        td1.appendChild(span);
-        tr.appendChild(td1);
-        appendCellNum(tr, fmtInt(t.requests));
-        appendCellNum(tr, fmtInt(t.total_tokens));
-        appendCellNum(tr, fmtMoney(t.spend));
-        tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    taskHost.appendChild(table);
-
-    row.addEventListener("click", function() {
-        if (row.classList.contains("expanded")) {
-            row.classList.remove("expanded");
-            taskHost.classList.add("hidden");
-        } else {
-            row.classList.add("expanded");
-            taskHost.classList.remove("hidden");
-        }
-    });
-
-    wrap.appendChild(row);
-    wrap.appendChild(taskHost);
-    return wrap;
-}
-
 function renderStatusCodes(d) {
     var body = $("status-body");
     body.textContent = "";
@@ -498,27 +393,6 @@ function renderStatusCodes(d) {
         appendCellNum(tr, ((e.count / total) * 100).toFixed(1) + "%");
         body.appendChild(tr);
     });
-}
-
-function renderSchemaHint(d) {
-    var hint = $("schema-hint");
-    var schema = d.tag_schema || {};
-    hint.textContent = "";
-    var p1 = document.createElement("span");
-    p1.textContent = "Tag requests with ";
-    var c1 = document.createElement("code");
-    c1.textContent = "project:1042";
-    var p2 = document.createElement("span");
-    p2.textContent = " and ";
-    var c2 = document.createElement("code");
-    c2.textContent = "task:3.1.2";
-    var p3 = document.createElement("span");
-    p3.textContent = ". Tasks must accompany a Project; otherwise the request is rolled into Unattributed.";
-    hint.appendChild(p1);
-    hint.appendChild(c1);
-    hint.appendChild(p2);
-    hint.appendChild(c2);
-    hint.appendChild(p3);
 }
 
 function appendCell(tr, text) {

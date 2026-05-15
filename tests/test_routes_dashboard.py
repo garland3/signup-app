@@ -1,8 +1,13 @@
 """End-to-end tests for the /api/dashboard route.
 
 Mocks the LiteLLM proxy with respx and asserts the assembled payload
-contains the rollups the frontend depends on.
+contains the rollups the frontend depends on. The dashboard backs onto
+``/user/daily/activity`` (the same endpoint the LiteLLM admin UI uses)
+rather than ``/spend/logs`` — the per-request log scales badly and
+trips the read timeout on busy accounts.
 """
+
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import respx
@@ -18,60 +23,106 @@ def app():
     return create_test_app()
 
 
-def _spend_logs():
-    """A small but representative set of LiteLLM spend log rows.
+def _metrics(
+    spend=0.0, prompt_tokens=0, completion_tokens=0,
+    api_requests=0, successful=None, failed=0,
+):
+    if successful is None:
+        successful = max(0, api_requests - failed)
+    return {
+        "spend": spend,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "api_requests": api_requests,
+        "successful_requests": successful,
+        "failed_requests": failed,
+    }
 
-    The values are deliberately easy to hand-verify so the assertions
-    below stay readable as additions to the dashboard schema accrue.
-    """
-    return [
-        {
-            "request_id": "r1",
-            "api_key": "sk-aaa11111aaaaaaaa",
-            "model": "gpt-4o",
-            "spend": 0.10,
-            "prompt_tokens": 100,
-            "completion_tokens": 50,
-            "total_tokens": 150,
-            "startTime": "2026-05-01T10:00:00Z",
-            "user": "alice@example.com",
-            "metadata": {"status": "success", "status_code": 200},
-            "request_tags": ["project:1042", "task:3.1.2"],
+
+def _daily_activity():
+    """A small daily-activity payload that exercises every breakdown."""
+    today = datetime.now(timezone.utc).date()
+    return {
+        "results": [
+            {
+                "date": today.isoformat(),
+                "metrics": _metrics(
+                    spend=0.10, prompt_tokens=100, completion_tokens=50,
+                    api_requests=1,
+                ),
+                "breakdown": {
+                    "models": {
+                        "gpt-4o": {
+                            "metrics": _metrics(
+                                spend=0.10, prompt_tokens=100,
+                                completion_tokens=50, api_requests=1,
+                            ),
+                            "metadata": {},
+                        },
+                    },
+                    "api_keys": {
+                        "sk-aaa11111aaaaaaaa": {
+                            "metrics": _metrics(
+                                spend=0.10, prompt_tokens=100,
+                                completion_tokens=50, api_requests=1,
+                            ),
+                            "metadata": {"key_alias": "alice-prod"},
+                        },
+                    },
+                    "providers": {},
+                },
+            },
+            {
+                "date": (today - timedelta(days=1)).isoformat(),
+                "metrics": _metrics(
+                    spend=0.30, prompt_tokens=200, completion_tokens=100,
+                    api_requests=2, failed=1,
+                ),
+                "breakdown": {
+                    "models": {
+                        "claude-3-5-sonnet": {
+                            "metrics": _metrics(
+                                spend=0.30, prompt_tokens=200,
+                                completion_tokens=100, api_requests=2,
+                                failed=1,
+                            ),
+                            "metadata": {},
+                        },
+                    },
+                    "api_keys": {
+                        "sk-bbb22222bbbbbbbb": {
+                            "metrics": _metrics(
+                                spend=0.30, prompt_tokens=200,
+                                completion_tokens=100, api_requests=2,
+                                failed=1,
+                            ),
+                            "metadata": {"key_alias": "alice-research"},
+                        },
+                    },
+                    "providers": {},
+                },
+            },
+        ],
+        "metadata": {
+            "total_spend": 0.40,
+            "total_api_requests": 3,
+            "total_successful_requests": 2,
+            "total_failed_requests": 1,
+            "page": 1,
+            "total_pages": 1,
+            "has_more": False,
         },
-        {
-            "request_id": "r2",
-            "api_key": "sk-bbb22222bbbbbbbb",
-            "model": "claude-3-5-sonnet",
-            "spend": 0.30,
-            "prompt_tokens": 200,
-            "completion_tokens": 100,
-            "total_tokens": 300,
-            "startTime": "2026-05-02T10:00:00Z",
-            "user": "alice@example.com",
-            "metadata": {"status": "success", "status_code": 200},
-            "request_tags": ["project:2001", "task:1.1"],
-        },
-        {
-            "request_id": "r3",
-            "api_key": "sk-aaa11111aaaaaaaa",
-            "model": "gpt-4o",
-            "spend": 0.0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "startTime": "2026-05-03T10:00:00Z",
-            "user": "alice@example.com",
-            "metadata": {"status": "failure", "status_code": 500},
-            "request_tags": ["project:1042"],
-        },
-    ]
+    }
 
 
 @pytest.mark.asyncio
 @respx.mock
 async def test_dashboard_returns_aggregated_payload(app):
-    respx.get(f"{LITELLM}/spend/logs").mock(
-        return_value=Response(200, json=_spend_logs())
+    respx.get(f"{LITELLM}/user/daily/activity").mock(
+        return_value=Response(200, json=_daily_activity())
     )
     respx.get(f"{LITELLM}/user/info").mock(
         return_value=Response(200, json={
@@ -84,18 +135,7 @@ async def test_dashboard_returns_aggregated_payload(app):
         })
     )
     respx.get(f"{LITELLM}/key/list").mock(
-        return_value=Response(200, json=[
-            {
-                "token": "sk-aaa11111aaaaaaaa",
-                "key_alias": "alice-prod",
-                "user_id": "alice@example.com",
-            },
-            {
-                "token": "sk-bbb22222bbbbbbbb",
-                "key_alias": "alice-research",
-                "user_id": "alice@example.com",
-            },
-        ])
+        return_value=Response(200, json=[])
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -120,23 +160,17 @@ async def test_dashboard_returns_aggregated_payload(app):
     models = {m["key"]: m for m in data["models"]}
     assert "gpt-4o" in models
     assert "claude-3-5-sonnet" in models
-    assert models["gpt-4o"]["requests"] == 2
+    assert models["gpt-4o"]["requests"] == 1
     assert models["claude-3-5-sonnet"]["spend"] == pytest.approx(0.30)
 
-    # Keys breakdown picks up aliases from /key/list.
+    # Keys breakdown — aliases come from the breakdown's per-key metadata.
     aliases = {k["alias"] for k in data["keys"]}
     assert "alice-prod" in aliases
     assert "alice-research" in aliases
 
-    # Project / task hierarchy
-    projects = {p["project"]: p for p in data["projects"]}
-    assert "1042" in projects
-    assert "2001" in projects
-    assert projects["1042"]["requests"] == 2
-
-    # Status codes
+    # Status codes projected from success/failure counts.
     assert data["status_codes"]["200"] == 2
-    assert data["status_codes"]["500"] == 1
+    assert data["status_codes"]["error"] == 1
 
     # User email is echoed back so the page can render it.
     assert data["user_email"] == "alice@example.com"
@@ -145,13 +179,9 @@ async def test_dashboard_returns_aggregated_payload(app):
 @pytest.mark.asyncio
 @respx.mock
 async def test_dashboard_survives_missing_user_info(app):
-    """A 404 from /user/info shouldn't kill the dashboard.
-
-    Newly-onboarded users may not have a user record yet; the spend
-    rollups still work without one.
-    """
-    respx.get(f"{LITELLM}/spend/logs").mock(
-        return_value=Response(200, json=_spend_logs())
+    """A 404 from /user/info shouldn't kill the dashboard."""
+    respx.get(f"{LITELLM}/user/daily/activity").mock(
+        return_value=Response(200, json=_daily_activity())
     )
     respx.get(f"{LITELLM}/user/info").mock(
         return_value=Response(404, json={"detail": "User not found"})
@@ -171,9 +201,9 @@ async def test_dashboard_survives_missing_user_info(app):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_dashboard_502_when_spend_logs_unreachable(app):
-    """Without spend logs there's nothing to render, so we surface a 502."""
-    respx.get(f"{LITELLM}/spend/logs").mock(
+async def test_dashboard_502_when_daily_activity_unreachable(app):
+    """Without the daily-activity payload there's nothing to render."""
+    respx.get(f"{LITELLM}/user/daily/activity").mock(
         return_value=Response(503, json={"detail": "down"})
     )
     respx.get(f"{LITELLM}/user/info").mock(
@@ -199,17 +229,15 @@ async def test_dashboard_requires_auth(app):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_dashboard_bounds_spend_logs_by_period(app):
-    """The /spend/logs upstream call must be bounded by start_date.
+async def test_dashboard_bounds_daily_activity_by_period(app):
+    """The /user/daily/activity call must be bounded by start_date+end_date.
 
-    An unbounded query against a busy account returns thousands of rows
-    and reliably trips the read timeout, so the route derives a
-    start_date from period_days and forwards it.
+    Even though the daily endpoint is much cheaper than /spend/logs, we
+    still want the proxy to do the date filter so the response is small
+    and predictable.
     """
-    from datetime import datetime, timedelta, timezone
-
-    route = respx.get(f"{LITELLM}/spend/logs").mock(
-        return_value=Response(200, json=[])
+    route = respx.get(f"{LITELLM}/user/daily/activity").mock(
+        return_value=Response(200, json={"results": [], "metadata": {}})
     )
     respx.get(f"{LITELLM}/user/info").mock(
         return_value=Response(200, json={"user_id": "alice@example.com"})
@@ -225,18 +253,59 @@ async def test_dashboard_bounds_spend_logs_by_period(app):
     assert route.called
     params = dict(route.calls.last.request.url.params)
     assert params.get("user_id") == "alice@example.com"
-    assert params.get("summarize") == "false"
-    expected = (
-        datetime.now(timezone.utc) - timedelta(days=14)
-    ).date().isoformat()
-    assert params.get("start_date") == expected
+    today = datetime.now(timezone.utc).date()
+    assert params.get("start_date") == (today - timedelta(days=14)).isoformat()
+    assert params.get("end_date") == today.isoformat()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_dashboard_follows_pagination(app):
+    """When LiteLLM signals has_more, the client must pull every page."""
+    today = datetime.now(timezone.utc).date()
+    page1 = {
+        "results": [{
+            "date": today.isoformat(),
+            "metrics": _metrics(spend=0.10, api_requests=1),
+            "breakdown": {"models": {}, "api_keys": {}, "providers": {}},
+        }],
+        "metadata": {"page": 1, "total_pages": 2, "has_more": True},
+    }
+    page2 = {
+        "results": [{
+            "date": (today - timedelta(days=1)).isoformat(),
+            "metrics": _metrics(spend=0.20, api_requests=2),
+            "breakdown": {"models": {}, "api_keys": {}, "providers": {}},
+        }],
+        "metadata": {"page": 2, "total_pages": 2, "has_more": False},
+    }
+
+    def _handler(request):
+        page = request.url.params.get("page", "1")
+        return Response(200, json=page1 if page == "1" else page2)
+
+    route = respx.get(f"{LITELLM}/user/daily/activity").mock(side_effect=_handler)
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(200, json={"user_id": "alice@example.com"})
+    )
+    respx.get(f"{LITELLM}/key/list").mock(
+        return_value=Response(200, json=[])
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/dashboard?period_days=7", headers=AUTH)
+    assert r.status_code == 200
+    data = r.json()
+    assert route.call_count == 2
+    assert data["lifetime"]["requests"] == 3
+    assert data["lifetime"]["spend"] == pytest.approx(0.30)
 
 
 @pytest.mark.asyncio
 @respx.mock
 async def test_dashboard_period_days_validated(app):
-    respx.get(f"{LITELLM}/spend/logs").mock(
-        return_value=Response(200, json=[])
+    respx.get(f"{LITELLM}/user/daily/activity").mock(
+        return_value=Response(200, json={"results": [], "metadata": {}})
     )
     respx.get(f"{LITELLM}/user/info").mock(
         return_value=Response(200, json={"user_id": "alice@example.com"})

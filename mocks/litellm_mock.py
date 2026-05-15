@@ -110,10 +110,10 @@ async def get_user(user_id: str = "", authorization: str = Header()):
         "budget_reset_at",
         (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
     )
+    _seed_daily_activity(user_id)
     spend_total = sum(
-        float(row.get("spend") or 0)
-        for row in spend_logs_db
-        if row.get("user") == user_id
+        float(r["metrics"]["spend"])
+        for r in daily_activity_db.get(user_id, [])
     )
     record["spend"] = round(spend_total, 6)
     return record
@@ -282,129 +282,162 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# Spend / usage endpoints (used by the accounting dashboard)
+# Daily activity endpoint (used by the accounting dashboard)
 # ---------------------------------------------------------------------------
 #
-# The mock keeps a small, deterministic spend log keyed by user_id so the
-# dashboard has something to render in local dev. Records are seeded on
-# first read (rather than at module import) so each fresh run gets the
-# current date — otherwise the time-series chart in the UI would always
-# bottom out at "no recent activity" once the seed data ages out.
+# The mock keeps a small, deterministic per-day rollup keyed by user_id
+# so the dashboard has something to render in local dev. Records are
+# seeded on first read (rather than at module import) so each fresh run
+# gets the current date — otherwise the time-series chart in the UI
+# would always bottom out at "no recent activity" once the seed data
+# ages out.
 
-spend_logs_db: list[dict] = []
-_seeded_users: set[str] = set()
+daily_activity_db: dict[str, list[dict]] = {}
 
 
-def _seed_spend_logs(user_id: str) -> None:
-    """Populate the spend log with synthetic activity for ``user_id``.
+def _seed_daily_activity(user_id: str) -> None:
+    """Populate per-day rollups with synthetic activity for ``user_id``.
 
-    The seed data is intentionally varied — multiple models, multiple
-    keys, multiple Project/Task tags, and a deliberate "tag missing"
-    request — so the dashboard surfaces every code path without anyone
-    having to run real traffic through the proxy first.
+    The seed data spans multiple models and multiple keys so every
+    section of the dashboard surfaces without anyone having to push
+    real traffic through the proxy first. Shape mirrors LiteLLM's
+    ``DailySpendData`` / ``BreakdownMetrics`` schema.
     """
-    if user_id in _seeded_users:
+    if user_id in daily_activity_db:
         return
-    _seeded_users.add(user_id)
-    now = datetime.now(timezone.utc)
+    today = datetime.now(timezone.utc).date()
+
+    # (days_ago, [(model, api_key_alias, prompt, completion, spend, ok)])
     samples = [
-        # (days_ago, model, api_key_alias, prompt, completion, spend, tags, status)
-        (0, "gpt-4o", "alice-prod", 1200, 350, 0.0182, ["project:1042", "task:3.1.2"], "success"),
-        (0, "gpt-4o-mini", "alice-prod", 800, 220, 0.0024, ["project:1042", "task:3.1.2"], "success"),
-        (1, "gpt-4o", "alice-prod", 1500, 410, 0.0221, ["project:1042", "task:3.1"], "success"),
-        (1, "claude-3-5-sonnet", "alice-research", 2200, 600, 0.0468, ["project:2001", "task:1.2"], "success"),
-        (2, "claude-3-5-sonnet", "alice-research", 1800, 520, 0.0392, ["project:2001", "task:1.2"], "success"),
-        (3, "gpt-4o", "alice-prod", 900, 180, 0.0117, ["project:1042", "task:3"], "success"),
-        (4, "gpt-4o-mini", "alice-prod", 600, 140, 0.0014, ["project:1042"], "success"),
-        (5, "gpt-4o", "alice-prod", 1100, 260, 0.0146, [], "success"),  # unattributed
-        (6, "claude-3-5-sonnet", "alice-research", 700, 200, 0.0148, ["task:5.1"], "success"),  # malformed - no project
-        (7, "gpt-4o", "alice-prod", 0, 0, 0.0, ["project:1042", "task:3.1.2"], "failure"),
-        (10, "gpt-4o", "alice-prod", 1400, 380, 0.0203, ["project:1042", "task:3.2"], "success"),
-        (15, "claude-3-5-sonnet", "alice-research", 1900, 540, 0.0408, ["project:2001", "task:1.1"], "success"),
-        (25, "gpt-4o-mini", "alice-prod", 500, 100, 0.0009, ["project:1042", "task:3.1.1"], "success"),
-        (35, "gpt-4o", "alice-prod", 1300, 320, 0.0173, ["project:1042", "task:3.1.2"], "success"),
+        (0, [
+            ("gpt-4o", "alice-prod", 1200, 350, 0.0182, True),
+            ("gpt-4o-mini", "alice-prod", 800, 220, 0.0024, True),
+        ]),
+        (1, [
+            ("gpt-4o", "alice-prod", 1500, 410, 0.0221, True),
+            ("claude-3-5-sonnet", "alice-research", 2200, 600, 0.0468, True),
+        ]),
+        (2, [("claude-3-5-sonnet", "alice-research", 1800, 520, 0.0392, True)]),
+        (3, [("gpt-4o", "alice-prod", 900, 180, 0.0117, True)]),
+        (4, [("gpt-4o-mini", "alice-prod", 600, 140, 0.0014, True)]),
+        (5, [("gpt-4o", "alice-prod", 1100, 260, 0.0146, True)]),
+        (7, [("gpt-4o", "alice-prod", 0, 0, 0.0, False)]),
+        (10, [("gpt-4o", "alice-prod", 1400, 380, 0.0203, True)]),
+        (15, [("claude-3-5-sonnet", "alice-research", 1900, 540, 0.0408, True)]),
+        (25, [("gpt-4o-mini", "alice-prod", 500, 100, 0.0009, True)]),
+        (35, [("gpt-4o", "alice-prod", 1300, 320, 0.0173, True)]),
     ]
-    for days_ago, model, alias, ptok, ctok, spend, tags, status in samples:
-        ts = (now - timedelta(days=days_ago)).isoformat()
-        # Find a real key token for this alias if one exists, otherwise
-        # fall back to a synthetic prefix so the dashboard still has a
-        # stable identifier to group by.
-        api_key = ""
+
+    def _zero():
+        return {
+            "spend": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+        }
+
+    def _add(dst, ptok, ctok, spend, ok):
+        dst["spend"] += spend
+        dst["prompt_tokens"] += ptok
+        dst["completion_tokens"] += ctok
+        dst["total_tokens"] += ptok + ctok
+        dst["api_requests"] += 1
+        if ok:
+            dst["successful_requests"] += 1
+        else:
+            dst["failed_requests"] += 1
+
+    def _resolve_api_key(alias: str) -> str:
         for record in keys_db.values():
             if (
                 record.get("user_id") == user_id
                 and record.get("key_alias", "").endswith(alias)
             ):
-                api_key = record["token"]
-                break
-        if not api_key:
-            api_key = "sk-" + alias.replace("-", "").ljust(20, "0")[:20]
+                return record["token"]
+        return "sk-" + alias.replace("-", "").ljust(20, "0")[:20]
 
-        spend_logs_db.append(
-            {
-                "request_id": f"req-{secrets.token_hex(8)}",
-                "api_key": api_key,
-                "model": model,
-                "call_type": "completion",
-                "spend": spend,
-                "prompt_tokens": ptok,
-                "completion_tokens": ctok,
-                "total_tokens": ptok + ctok,
-                "startTime": ts,
-                "endTime": ts,
-                "user": user_id,
-                "metadata": {
-                    "status": status,
-                    "status_code": 200 if status == "success" else 500,
-                    "user_api_key_user_id": user_id,
-                },
-                "request_tags": tags,
-                "cache_hit": "False",
-            }
-        )
+    days: list[dict] = []
+    for days_ago, events in samples:
+        d = (today - timedelta(days=days_ago)).isoformat()
+        day_metrics = _zero()
+        models: dict[str, dict] = {}
+        api_keys: dict[str, dict] = {}
+        for model, alias, ptok, ctok, spend, ok in events:
+            _add(day_metrics, ptok, ctok, spend, ok)
+            m = models.setdefault(
+                model, {"metrics": _zero(), "metadata": {}}
+            )
+            _add(m["metrics"], ptok, ctok, spend, ok)
+            api_key = _resolve_api_key(alias)
+            k = api_keys.setdefault(
+                api_key,
+                {"metrics": _zero(), "metadata": {"key_alias": alias}},
+            )
+            _add(k["metrics"], ptok, ctok, spend, ok)
+        days.append({
+            "date": d,
+            "metrics": day_metrics,
+            "breakdown": {
+                "models": models,
+                "api_keys": api_keys,
+                "providers": {},
+            },
+        })
+    daily_activity_db[user_id] = days
 
 
-@app.get("/spend/logs")
-async def spend_logs(
+@app.get("/user/daily/activity")
+async def user_daily_activity(
     user_id: str = "",
-    api_key: str = "",
-    request_id: str = "",
     start_date: str = "",
     end_date: str = "",
-    summarize: str = "true",
+    page: int = 1,
+    page_size: int = 50,
     authorization: str = Header(),
 ):
     check_admin(authorization)
     if user_id:
-        _seed_spend_logs(user_id)
+        _seed_daily_activity(user_id)
+    rows = list(daily_activity_db.get(user_id, []))
 
-    out = []
-    for row in spend_logs_db:
-        if user_id and row.get("user") != user_id:
-            continue
-        if api_key and row.get("api_key") != api_key:
-            continue
-        if request_id and row.get("request_id") != request_id:
-            continue
-        out.append(row)
-    return out
+    if start_date:
+        rows = [r for r in rows if r["date"] >= start_date]
+    if end_date:
+        rows = [r for r in rows if r["date"] <= end_date]
 
+    # Aggregate totals for the metadata block, matching LiteLLM's shape.
+    totals = {
+        "total_spend": 0.0,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0,
+        "total_tokens": 0,
+        "total_api_requests": 0,
+        "total_successful_requests": 0,
+        "total_failed_requests": 0,
+        "total_cache_read_input_tokens": 0,
+        "total_cache_creation_input_tokens": 0,
+    }
+    for r in rows:
+        m = r["metrics"]
+        totals["total_spend"] += m["spend"]
+        totals["total_prompt_tokens"] += m["prompt_tokens"]
+        totals["total_completion_tokens"] += m["completion_tokens"]
+        totals["total_tokens"] += m["total_tokens"]
+        totals["total_api_requests"] += m["api_requests"]
+        totals["total_successful_requests"] += m["successful_requests"]
+        totals["total_failed_requests"] += m["failed_requests"]
 
-@app.get("/spend/tags")
-async def spend_tags(
-    start_date: str = "",
-    end_date: str = "",
-    authorization: str = Header(),
-):
-    """Return a tag-aggregated rollup. Mirrors LiteLLM's response shape
-    closely enough that the dashboard's spot-checks against it work."""
-    check_admin(authorization)
-    by_tag: dict[str, dict] = {}
-    for row in spend_logs_db:
-        for tag in row.get("request_tags") or []:
-            bucket = by_tag.setdefault(
-                tag, {"individual_request_tag": tag, "spend": 0.0, "log_count": 0}
-            )
-            bucket["spend"] += float(row.get("spend") or 0)
-            bucket["log_count"] += 1
-    return list(by_tag.values())
+    return {
+        "results": rows,
+        "metadata": {
+            **totals,
+            "page": page,
+            "total_pages": 1,
+            "has_more": False,
+        },
+    }

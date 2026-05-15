@@ -28,9 +28,11 @@ upstream the cards show "Unlimited" rather than implying a 0% bar.
 ### Token and request totals
 
 Lifetime and current-period totals for tokens (with prompt vs. completion
-split), API requests, success vs. failure counts, and tokens-per-request
-distribution (avg, p50, p95). The current-period window is controlled by
-the **Period** dropdown in the header (7 / 30 / 90 / 365 days).
+split), API requests, success vs. failure counts, and the average
+tokens-per-request. The current-period window is controlled by the
+**Period** dropdown in the header (7 / 30 / 90 / 365 days). Percentile
+samples aren't available because the proxy serves this view from the
+daily rollup table, not per-request rows.
 
 ### Time series
 
@@ -49,63 +51,42 @@ the largest line items are at the top.
 
 ### API key breakdown
 
-Per-key rollups, joining the spend log's raw `api_key` column to the
-key alias from `GET /key/list`. Keys you've deleted still show here if
-they have historical spend, so the numbers in this section always
-reconcile with the lifetime totals above.
-
-### Project / Task hierarchy
-
-Two-level tree built from `request_tags`. Click a project row to drill
-into its constituent tasks.
-
-![Project / task drill-down](images/dashboard-projects.png)
-
-#### Tag schema
-
-The dashboard expects requests to be tagged using LiteLLM's standard
-`metadata.tags` mechanism, with two specific tag forms:
-
-| Form              | Pattern                                  | Example         |
-|-------------------|------------------------------------------|-----------------|
-| Project           | `project:<integer>`                      | `project:1042`  |
-| Task              | `task:<dotted-integer>` (1-3 components) | `task:3.1.2`    |
-
-Both `project:1042` and the human-friendly `Project: 1042` (with
-whitespace) are accepted; matching is case-insensitive.
-
-A request with a Task tag but no Project tag is treated as malformed
-and rolled into the **Unattributed** bucket — surfacing the gap in
-tagging hygiene rather than silently inventing a phantom project named
-after the bare task identifier. Requests with no tags at all also land
-in Unattributed.
+Per-key rollups, joining the proxy's `api_keys` breakdown to the alias
+from `GET /key/list`. The proxy embeds the alias on the breakdown entry
+when present; `/key/list` is consulted as a fallback for older entries
+that didn't capture it. Keys you've deleted still show here if they
+have historical spend, so the numbers in this section always reconcile
+with the lifetime totals above.
 
 ### Request status
 
-Counts per HTTP status code. The dashboard prefers the explicit
-`status_code` from `metadata` when present; otherwise it falls back to
-the `metadata.status` string, and finally to a heuristic ("recorded
-spend or tokens" -> success, otherwise error).
+Success vs. failure counts, projected from the daily rollup's
+`successful_requests` and `failed_requests` columns. The per-HTTP-code
+histogram isn't surfaced by the daily endpoint, so successes appear as
+`200` and failures as `error`.
 
 ## Data flow
 
 ```
-Browser ─GET /api/dashboard──> Signup App ┬─GET /user/info──> LiteLLM
-                                          ├─GET /spend/logs──>
-                                          └─GET /key/list───>
+Browser ─GET /api/dashboard──> Signup App ┬─GET /user/info──────────> LiteLLM
+                                          ├─GET /user/daily/activity─>
+                                          └─GET /key/list────────────>
                               <──aggregated JSON─
 ```
 
-`/spend/logs` is called with `summarize=false` so we get the raw
-per-request rows (otherwise LiteLLM aggregates by date and we lose the
-per-key, per-model dimensions). All aggregation happens in
+`/user/daily/activity` is the same endpoint LiteLLM's admin UI uses for
+its per-user spend view. It returns one row per day with per-model and
+per-api_key sub-totals already rolled up, which is dramatically cheaper
+than `/spend/logs?summarize=false` — the per-request log scales with
+request volume and reliably trips the upstream read timeout on busy
+accounts. All flattening / window-slicing happens in
 `app/core/dashboard_metrics.py` and is unit-tested in
 `tests/test_dashboard_metrics.py`.
 
 A failure on `/user/info` or `/key/list` is non-fatal — the dashboard
 still renders the spend rollups, just without budget cards or key
-aliases. Only a failed `/spend/logs` call surfaces as a 502 to the
-caller.
+aliases. Only a failed `/user/daily/activity` call surfaces as a 502
+to the caller.
 
 ## Period selector
 
@@ -145,7 +126,6 @@ curl -s -X POST -H "X-User-Email: alice@example.com" \
 uv run python scripts/capture_docs_screenshots.py
 ```
 
-The mock seeds 14 representative spend rows on first read, including
-multiple models, multiple keys, multiple Project/Task tag combinations,
-plus one deliberately untagged request and one malformed Task-only
-request, so every section of the dashboard renders meaningful data.
+The mock seeds a representative daily-activity rollup on first read,
+covering multiple models and multiple keys plus one failed-request day,
+so every section of the dashboard renders meaningful data.

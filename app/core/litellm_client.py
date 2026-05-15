@@ -225,66 +225,64 @@ class LiteLLMClient:
         r.raise_for_status()
         return r.json()
 
-    async def get_spend_logs(
+    async def get_user_daily_activity(
         self,
         user_id: str,
         start_date: str | None = None,
         end_date: str | None = None,
-    ) -> list[dict]:
-        """GET /spend/logs?user_id=...&summarize=false
+        page_size: int = 1000,
+    ) -> dict:
+        """GET /user/daily/activity?user_id=...
 
-        Returns the raw per-request spend log entries for ``user_id``.
-        ``summarize=false`` is required so we get individual rows
-        (otherwise LiteLLM aggregates by date and we lose the per-key,
-        per-model dimensions the dashboard needs).
+        Returns the pre-aggregated daily activity for ``user_id`` — one
+        row per day with per-model and per-api_key breakdowns already
+        rolled up by the proxy. This is the same endpoint LiteLLM's
+        admin UI uses for its per-user spend view, and it's dramatically
+        cheaper than ``/spend/logs?summarize=false`` because the proxy
+        reads from the ``LiteLLM_DailyUserSpend`` table instead of the
+        raw per-request log.
+
+        The response is paginated; we follow ``has_more`` and merge
+        ``results`` from every page. ``page_size`` is capped at 1000 by
+        the proxy. For a single user 365 daily rows fit comfortably
+        in one page in the common case, but we page defensively.
         """
-        params: dict[str, str] = {"user_id": user_id, "summarize": "false"}
+        params: dict[str, str] = {
+            "user_id": user_id,
+            "page_size": str(page_size),
+        }
         if start_date:
             params["start_date"] = start_date
         if end_date:
             params["end_date"] = end_date
-        r = await self._client().get(
-            "/spend/logs",
-            params=params,
-            headers=self._headers(),
-        )
-        if r.status_code == 404:
-            return []
-        r.raise_for_status()
-        body = r.json()
-        if isinstance(body, list):
-            return body
-        if isinstance(body, dict):
-            for key in ("logs", "data", "results"):
-                value = body.get(key)
-                if isinstance(value, list):
-                    return value
-        return []
 
-    async def get_spend_tags(
-        self,
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> list[dict]:
-        """GET /spend/tags?start_date=...&end_date=...
-
-        Returns the tag-aggregated spend report. The proxy doesn't filter
-        this by user, so callers that need per-user numbers should
-        instead aggregate from :meth:`get_spend_logs`. Provided here only
-        because the upstream endpoint is part of the documented surface.
-        """
-        params: dict[str, str] = {}
-        if start_date:
-            params["start_date"] = start_date
-        if end_date:
-            params["end_date"] = end_date
-        r = await self._client().get(
-            "/spend/tags",
-            params=params,
-            headers=self._headers(),
-        )
-        if r.status_code == 404:
-            return []
-        r.raise_for_status()
-        body = r.json()
-        return body if isinstance(body, list) else []
+        merged_results: list[dict] = []
+        merged_metadata: dict = {}
+        page = 1
+        while True:
+            params["page"] = str(page)
+            r = await self._client().get(
+                "/user/daily/activity",
+                params=params,
+                headers=self._headers(),
+            )
+            if r.status_code == 404:
+                return {"results": [], "metadata": {}}
+            r.raise_for_status()
+            body = r.json()
+            if not isinstance(body, dict):
+                return {"results": [], "metadata": {}}
+            results = body.get("results") or []
+            if isinstance(results, list):
+                merged_results.extend(results)
+            metadata = body.get("metadata") or {}
+            if isinstance(metadata, dict):
+                merged_metadata = metadata
+            has_more = bool(metadata.get("has_more")) if isinstance(metadata, dict) else False
+            if not has_more:
+                break
+            page += 1
+            # Hard cap to keep a malformed has_more flag from spinning forever.
+            if page > 50:
+                break
+        return {"results": merged_results, "metadata": merged_metadata}

@@ -1,14 +1,15 @@
 """User accounting dashboard route.
 
-Pulls usage and spend data from the LiteLLM proxy, aggregates it
-server-side via ``app.core.dashboard_metrics.aggregate``, and returns a
-single JSON payload the frontend can render without any further math.
+Pulls pre-aggregated daily activity from the LiteLLM proxy
+(``/user/daily/activity`` — the same endpoint LiteLLM's admin UI uses)
+and flattens it into the JSON shape the dashboard frontend renders.
+``/user/info`` contributes the budget posture and ``/key/list`` supplies
+alias labels for the per-key breakdown.
 
-Aggregation is deliberately done on the server: LiteLLM's per-user
-spend log can run to thousands of rows, and we don't want every page
-load to ship that volume of raw data to the browser. The route also
-gives us a single place to enforce ownership (the user only ever sees
-their own spend logs and key aliases).
+We deliberately use the daily-rollup endpoint instead of
+``/spend/logs``: the per-request log is several orders of magnitude
+larger than the daily summary, and on busy accounts it reliably trips
+the upstream read timeout.
 """
 
 import logging
@@ -46,36 +47,29 @@ async def get_dashboard(
     """Return the aggregated accounting dashboard payload.
 
     Calls three LiteLLM endpoints in sequence:
-      - ``/user/info``   for budget posture
-      - ``/spend/logs``  for raw per-request spend (filtered by user_id)
-      - ``/key/list``    so the per-key breakdown can show aliases
+      - ``/user/daily/activity`` for the daily spend/usage rollup
+      - ``/user/info``           for budget posture
+      - ``/key/list``            so the per-key breakdown can show aliases
 
     A failure on ``/user/info`` or ``/key/list`` is non-fatal: those
     endpoints contribute *labels* and *budget metadata* but the spend
-    rollups still work without them. Only a failed ``/spend/logs`` call
+    rollups still work without them. Only a failed daily-activity call
     surfaces as a 502 to the caller, since without it the dashboard has
     no data to render.
     """
     user_email = request.state.user_email
     client = _get_client()
 
-    # Bound the upstream spend_logs query to the requested window.
-    # Without a start_date LiteLLM returns every row ever recorded for the
-    # user, which can run to thousands and reliably trips the read timeout
-    # on busy accounts. The aggregator already filters to the same window
-    # in-memory, so the only behavioural change is that "lifetime" rollups
-    # are now scoped to the window — true lifetime spend is exposed via
-    # budget.spend (sourced from /user/info).
-    start_date = (
-        datetime.now(timezone.utc) - timedelta(days=period_days)
-    ).date().isoformat()
+    today = datetime.now(timezone.utc).date()
+    start_date = (today - timedelta(days=period_days)).isoformat()
+    end_date = today.isoformat()
 
     try:
-        spend_logs = await client.get_spend_logs(
-            user_id=user_email, start_date=start_date
+        daily_activity = await client.get_user_daily_activity(
+            user_id=user_email, start_date=start_date, end_date=end_date
         )
     except Exception as e:
-        raise _upstream_error("spend_logs", e)
+        raise _upstream_error("user_daily_activity", e)
 
     user_info = None
     try:
@@ -94,7 +88,7 @@ async def get_dashboard(
 
     payload = aggregate(
         user_info=user_info,
-        spend_logs=spend_logs,
+        daily_activity=daily_activity,
         keys_list=keys_list,
         period_days=period_days,
     )
