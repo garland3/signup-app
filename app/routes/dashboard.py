@@ -12,6 +12,7 @@ their own spend logs and key aliases).
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -58,8 +59,21 @@ async def get_dashboard(
     user_email = request.state.user_email
     client = _get_client()
 
+    # Bound the upstream spend_logs query to the requested window.
+    # Without a start_date LiteLLM returns every row ever recorded for the
+    # user, which can run to thousands and reliably trips the read timeout
+    # on busy accounts. The aggregator already filters to the same window
+    # in-memory, so the only behavioural change is that "lifetime" rollups
+    # are now scoped to the window — true lifetime spend is exposed via
+    # budget.spend (sourced from /user/info).
+    start_date = (
+        datetime.now(timezone.utc) - timedelta(days=period_days)
+    ).date().isoformat()
+
     try:
-        spend_logs = await client.get_spend_logs(user_id=user_email)
+        spend_logs = await client.get_spend_logs(
+            user_id=user_email, start_date=start_date
+        )
     except Exception as e:
         raise _upstream_error("spend_logs", e)
 

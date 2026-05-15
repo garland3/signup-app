@@ -199,6 +199,41 @@ async def test_dashboard_requires_auth(app):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_dashboard_bounds_spend_logs_by_period(app):
+    """The /spend/logs upstream call must be bounded by start_date.
+
+    An unbounded query against a busy account returns thousands of rows
+    and reliably trips the read timeout, so the route derives a
+    start_date from period_days and forwards it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    route = respx.get(f"{LITELLM}/spend/logs").mock(
+        return_value=Response(200, json=[])
+    )
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(200, json={"user_id": "alice@example.com"})
+    )
+    respx.get(f"{LITELLM}/key/list").mock(
+        return_value=Response(200, json=[])
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/dashboard?period_days=14", headers=AUTH)
+    assert r.status_code == 200
+
+    assert route.called
+    params = dict(route.calls.last.request.url.params)
+    assert params.get("user_id") == "alice@example.com"
+    assert params.get("summarize") == "false"
+    expected = (
+        datetime.now(timezone.utc) - timedelta(days=14)
+    ).date().isoformat()
+    assert params.get("start_date") == expected
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_dashboard_period_days_validated(app):
     respx.get(f"{LITELLM}/spend/logs").mock(
         return_value=Response(200, json=[])
