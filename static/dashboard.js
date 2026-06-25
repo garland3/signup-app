@@ -469,4 +469,6 @@ $("period-select").addEventListener("change", function(e) {
     });
 });
 
-loadConfig().then(loadDashboard);
+loadConfig().catch(function(e) {
+    console.error("Failed to load config:", e);
+}).then(loadDashboard);

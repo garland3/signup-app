@@ -407,7 +407,9 @@ def aggregate(
         ) or token
         entry["alias"] = alias
         entry["key_prefix"] = (
-            (token[:8] + "...") if isinstance(token, str) and token.startswith("sk-") else token
+            _masked_token(token)
+            if isinstance(token, str) and token.startswith("sk-")
+            else token
         )
 
     lifetime_totals = _totals(results)
