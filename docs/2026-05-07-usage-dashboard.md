@@ -58,6 +58,12 @@ that didn't capture it. Keys you've deleted still show here if they
 have historical spend, so the numbers in this section always reconcile
 with the lifetime totals above.
 
+### Project / task breakdown
+
+Per-project and per-task rollups derived from key metadata fields named
+`project` and `task_number`. Set `SHOW_PROJECT_TASK_BREAKDOWN=false` to
+hide this section from the Usage page.
+
 ### Request status
 
 Success vs. failure counts, projected from the daily rollup's

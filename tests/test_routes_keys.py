@@ -416,6 +416,7 @@ async def test_get_config(app):
     # the frontend can decide whether to render those columns.
     assert data["show_spend"] is True
     assert data["show_budget"] is True
+    assert data["show_project_task_breakdown"] is True
 
 
 @pytest.mark.asyncio
@@ -446,6 +447,21 @@ async def test_get_config_show_budget_can_be_disabled(app):
         assert r.json()["show_budget"] is False
     finally:
         s.SHOW_BUDGET_COLUMN = original
+
+
+@pytest.mark.asyncio
+async def test_get_config_show_project_task_breakdown_can_be_disabled(app):
+    from app.core.config import get_settings
+    s = get_settings()
+    original = s.SHOW_PROJECT_TASK_BREAKDOWN
+    s.SHOW_PROJECT_TASK_BREAKDOWN = False
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/api/config", headers=AUTH)
+        assert r.status_code == 200
+        assert r.json()["show_project_task_breakdown"] is False
+    finally:
+        s.SHOW_PROJECT_TASK_BREAKDOWN = original
 
 
 @pytest.mark.asyncio

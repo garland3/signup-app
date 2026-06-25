@@ -7,6 +7,7 @@ var state = {
     period: 30,
     metric: "spend",
     data: null,
+    showProjectTaskBreakdown: true,
 };
 
 function $(id) { return document.getElementById(id); }
@@ -59,6 +60,8 @@ async function loadConfig() {
             document.title = cfg.app_name + " - Usage";
         }
         renderNavLinks(cfg.nav_links || []);
+        state.showProjectTaskBreakdown = cfg.show_project_task_breakdown !== false;
+        toggleProjectTaskBreakdown();
     } catch (e) { /* config is best-effort */ }
 }
 
@@ -116,8 +119,19 @@ function render() {
     renderTotals(d);
     renderTimeSeries(d);
     renderModels(d);
+    renderProjectTasks(d);
     renderKeys(d);
     renderStatusCodes(d);
+}
+
+function toggleProjectTaskBreakdown() {
+    var section = $("project-task-section");
+    if (!section) return;
+    if (state.showProjectTaskBreakdown) {
+        section.classList.remove("hidden");
+    } else {
+        section.classList.add("hidden");
+    }
 }
 
 function renderBudget(d) {
@@ -333,6 +347,34 @@ function renderModels(d) {
     });
 }
 
+function renderProjectTasks(d) {
+    toggleProjectTaskBreakdown();
+    if (!state.showProjectTaskBreakdown) return;
+    var body = $("projects-body");
+    body.textContent = "";
+    var rows = d.project_task_breakdown || [];
+    if (!rows.length) {
+        var tr = document.createElement("tr");
+        var td = document.createElement("td");
+        td.colSpan = 5;
+        td.className = "empty-state";
+        td.textContent = "No project/task usage recorded.";
+        tr.appendChild(td);
+        body.appendChild(tr);
+        return;
+    }
+    rows.forEach(function(row) {
+        var tr = document.createElement("tr");
+        tr.className = "project-row";
+        appendCell(tr, row.project || "(none)");
+        appendCell(tr, row.task_number || "(none)");
+        appendCellNum(tr, fmtInt(row.requests));
+        appendCellNum(tr, fmtInt(row.total_tokens));
+        appendCellNum(tr, fmtMoney(row.spend));
+        body.appendChild(tr);
+    });
+}
+
 function renderKeys(d) {
     var body = $("keys-body");
     body.textContent = "";
@@ -427,5 +469,4 @@ $("period-select").addEventListener("change", function(e) {
     });
 });
 
-loadConfig();
-loadDashboard();
+loadConfig().finally(loadDashboard);

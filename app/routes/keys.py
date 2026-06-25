@@ -218,6 +218,7 @@ async def get_config():
         "nav_links": s.nav_links,
         "show_spend": s.SHOW_SPEND_COLUMN,
         "show_budget": s.SHOW_BUDGET_COLUMN,
+        "show_project_task_breakdown": s.SHOW_PROJECT_TASK_BREAKDOWN,
     }
 
 

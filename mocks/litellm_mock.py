@@ -361,6 +361,19 @@ def _seed_daily_activity(user_id: str) -> None:
                 return record["token"]
         return "sk-" + alias.replace("-", "").ljust(20, "0")[:20]
 
+    def _resolve_key_metadata(alias: str) -> dict:
+        for record in keys_db.values():
+            if (
+                record.get("user_id") == user_id
+                and record.get("key_alias", "").endswith(alias)
+            ):
+                return record.get("metadata") or {}
+        defaults = {
+            "alice-prod": {"project": "1042", "task_number": "3.1.2"},
+            "alice-research": {"project": "2088", "task_number": "7.4.1"},
+        }
+        return defaults.get(alias, {})
+
     days: list[dict] = []
     for days_ago, events in samples:
         d = (today - timedelta(days=days_ago)).isoformat()
@@ -376,7 +389,13 @@ def _seed_daily_activity(user_id: str) -> None:
             api_key = _resolve_api_key(alias)
             k = api_keys.setdefault(
                 api_key,
-                {"metrics": _zero(), "metadata": {"key_alias": alias}},
+                {
+                    "metrics": _zero(),
+                    "metadata": {
+                        "key_alias": alias,
+                        **_resolve_key_metadata(alias),
+                    },
+                },
             )
             _add(k["metrics"], ptok, ctok, spend, ok)
         days.append({

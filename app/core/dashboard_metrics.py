@@ -179,6 +179,19 @@ def _build_alias_map(keys_list: list[dict]) -> dict[str, str]:
     return out
 
 
+def _build_metadata_map(keys_list: list[dict]) -> dict[str, dict]:
+    """Map known token identifiers to their key metadata."""
+    out: dict[str, dict] = {}
+    for k in keys_list:
+        metadata = k.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        for token in (k.get("token"), k.get("key"), k.get("token_id")):
+            if token:
+                out[token] = metadata
+    return out
+
+
 def _time_series(results: list[dict]) -> list[dict]:
     """Daily buckets straight from the proxy's daily rollup, gap-filled.
 
@@ -281,6 +294,52 @@ def _totals(results: list[dict]) -> dict:
     return _finalize_metrics(acc)
 
 
+def _metadata_value(metadata: dict, field: str) -> str:
+    value = metadata.get(field)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _project_task_breakdown(
+    results: list[dict],
+    metadata_map: dict[str, dict],
+) -> list[dict]:
+    buckets: dict[tuple[str, str], dict] = {}
+    for entry in results:
+        breakdown = entry.get("breakdown") or {}
+        api_keys = breakdown.get("api_keys") or {}
+        if not isinstance(api_keys, dict):
+            continue
+        for token, value in api_keys.items():
+            if not isinstance(value, dict):
+                continue
+            token_str = str(token)
+            metadata = value.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            fallback = metadata_map.get(token_str) or metadata_map.get(
+                f"{token_str[:8]}..."
+            )
+            if isinstance(fallback, dict):
+                metadata = {**fallback, **metadata}
+            project = _metadata_value(metadata, "project")
+            task_number = _metadata_value(metadata, "task_number")
+            if not project and not task_number:
+                continue
+            b = buckets.setdefault((project, task_number), _zero_metrics())
+            _add_metrics(b, value.get("metrics") or {})
+
+    out: list[dict] = []
+    for (project, task_number), b in buckets.items():
+        finalized = _finalize_metrics(b)
+        finalized["project"] = project
+        finalized["task_number"] = task_number
+        out.append(finalized)
+    out.sort(key=lambda x: x["spend"], reverse=True)
+    return out
+
+
 def _tokens_per_request(totals: dict) -> dict:
     """Average tokens per request — the only TPR figure recoverable.
 
@@ -319,6 +378,7 @@ def aggregate(
 
     keys_list = keys_list or []
     alias_map = _build_alias_map(keys_list)
+    metadata_map = _build_metadata_map(keys_list)
 
     period_results = _filter_results_by_window(results, period_days)
 
@@ -369,5 +429,6 @@ def aggregate(
         "time_series": _time_series(results),
         "models": models,
         "keys": keys_breakdown,
+        "project_task_breakdown": _project_task_breakdown(results, metadata_map),
         "status_codes": status_codes,
     }

@@ -69,7 +69,11 @@ def _daily_activity():
                                 spend=0.10, prompt_tokens=100,
                                 completion_tokens=50, api_requests=1,
                             ),
-                            "metadata": {"key_alias": "alice-prod"},
+                            "metadata": {
+                                "key_alias": "alice-prod",
+                                "project": "phoenix",
+                                "task_number": "T-42",
+                            },
                         },
                     },
                     "providers": {},
@@ -99,7 +103,11 @@ def _daily_activity():
                                 completion_tokens=100, api_requests=2,
                                 failed=1,
                             ),
-                            "metadata": {"key_alias": "alice-research"},
+                            "metadata": {
+                                "key_alias": "alice-research",
+                                "project": "atlas",
+                                "task_number": "A-1",
+                            },
                         },
                     },
                     "providers": {},
@@ -167,6 +175,13 @@ async def test_dashboard_returns_aggregated_payload(app):
     aliases = {k["alias"] for k in data["keys"]}
     assert "alice-prod" in aliases
     assert "alice-research" in aliases
+
+    # Project/task breakdown is derived from key metadata when present.
+    project_tasks = {
+        (row["project"], row["task_number"]) for row in data["project_task_breakdown"]
+    }
+    assert ("phoenix", "T-42") in project_tasks
+    assert ("atlas", "A-1") in project_tasks
 
     # Status codes projected from success/failure counts.
     assert data["status_codes"]["200"] == 2

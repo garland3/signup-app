@@ -176,6 +176,62 @@ def test_aggregate_keys_backfills_alias_from_key_list_when_missing():
     assert out["keys"][0]["alias"] == "alice-prod"
 
 
+def test_aggregate_project_task_breakdown_from_key_metadata():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(spend=3.0, total_tokens=600, api_requests=3),
+            api_keys={
+                "sk-project1": {
+                    "metrics": _metrics(spend=1.0, total_tokens=200, api_requests=1),
+                    "metadata": {
+                        "project": "phoenix",
+                        "task_number": "T-42",
+                    },
+                },
+                "sk-project2": {
+                    "metrics": _metrics(spend=2.0, total_tokens=400, api_requests=2),
+                    "metadata": {
+                        "project": "phoenix",
+                        "task_number": "T-43",
+                    },
+                },
+            },
+        )
+    ]
+    out = aggregate(user_info=None, daily_activity=_activity(results))
+    by_task = {row["task_number"]: row for row in out["project_task_breakdown"]}
+    assert by_task["T-42"]["project"] == "phoenix"
+    assert by_task["T-42"]["spend"] == pytest.approx(1.0)
+    assert by_task["T-43"]["requests"] == 2
+
+
+def test_aggregate_project_task_breakdown_backfills_from_key_list_metadata():
+    today = datetime.now(timezone.utc).date()
+    results = [
+        _day(
+            today.isoformat(),
+            _metrics(spend=1.0, total_tokens=100, api_requests=1),
+            api_keys={
+                "sk-fallback-token": {
+                    "metrics": _metrics(spend=1.0, total_tokens=100, api_requests=1),
+                    "metadata": {},
+                },
+            },
+        )
+    ]
+    keys_list = [{
+        "token": "sk-fallb...",
+        "metadata": {"project": "atlas", "task_number": "A-1"},
+    }]
+    out = aggregate(
+        user_info=None, daily_activity=_activity(results), keys_list=keys_list,
+    )
+    assert out["project_task_breakdown"][0]["project"] == "atlas"
+    assert out["project_task_breakdown"][0]["task_number"] == "A-1"
+
+
 # ---------------------------------------------------------------------------
 # Status code projection
 # ---------------------------------------------------------------------------

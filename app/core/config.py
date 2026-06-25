@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     # Show the "Budget" column in the keys table. Independent from the
     # Spend column so deployments can surface either, both, or neither.
     SHOW_BUDGET_COLUMN: bool = True
+    # Show the project/task usage breakdown on the usage dashboard.
+    SHOW_PROJECT_TASK_BREAKDOWN: bool = True
 
     # Custom navigation links shown in the page header. Format is a
     # comma-separated list of "Name|URL" pairs, e.g.

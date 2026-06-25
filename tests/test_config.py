@@ -12,6 +12,7 @@ def test_default_settings():
     # Dev-only bypass flags default off.
     assert s.ALLOW_TEST_USER is False
     assert s.ALLOW_INSECURE_STARTUP is False
+    assert s.SHOW_PROJECT_TASK_BREAKDOWN is True
 
 
 def test_debug_mode_enabled():
