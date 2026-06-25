@@ -179,6 +179,10 @@ def _build_alias_map(keys_list: list[dict]) -> dict[str, str]:
     return out
 
 
+def _masked_token(token: str) -> str:
+    return f"{token[:8]}..."
+
+
 def _build_metadata_map(keys_list: list[dict]) -> dict[str, dict]:
     """Map known token identifiers to their key metadata."""
     out: dict[str, dict] = {}
@@ -319,7 +323,7 @@ def _project_task_breakdown(
             if not isinstance(metadata, dict):
                 metadata = {}
             fallback = metadata_map.get(token_str) or metadata_map.get(
-                f"{token_str[:8]}..."
+                _masked_token(token_str)
             )
             if isinstance(fallback, dict):
                 metadata = {**fallback, **metadata}
@@ -399,7 +403,7 @@ def aggregate(
     for entry in keys_breakdown:
         token = entry["key"]
         alias = entry.get("alias") or alias_map.get(token) or alias_map.get(
-            token[:8] + "..."
+            _masked_token(token)
         ) or token
         entry["alias"] = alias
         entry["key_prefix"] = (

@@ -469,4 +469,4 @@ $("period-select").addEventListener("change", function(e) {
     });
 });
 
-loadConfig().finally(loadDashboard);
+loadConfig().then(loadDashboard);
