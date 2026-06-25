@@ -351,6 +351,7 @@ function renderProjectTasks(d) {
     toggleProjectTaskBreakdown();
     if (!state.showProjectTaskBreakdown) return;
     var body = $("projects-body");
+    if (!body) return;
     body.textContent = "";
     var rows = d.project_task_breakdown || [];
     if (!rows.length) {
@@ -469,6 +470,7 @@ $("period-select").addEventListener("change", function(e) {
     });
 });
 
-loadConfig().then(loadDashboard).catch(function(e) {
-    console.error("Failed to load config:", e);
+loadConfig();
+loadDashboard().catch(function(e) {
+    console.error("Failed to load dashboard:", e);
 });
