@@ -230,6 +230,11 @@ catch an overbroad configuration.
 3. Verify `/team/available` as shown above, for at least one ordinary user.
 4. Set `FEATURE_TEAMS_ENABLED=true` and restart the app.
 
+A proposed alternative to self-join, governing team membership with Entra ID
+access packages through an open-source SCIM bridge in this app (no LiteLLM
+Enterprise required), is described in
+[docs/2026-10-08-entra-access-packages-scim-design.md](docs/2026-10-08-entra-access-packages-scim-design.md).
+
 ## API Endpoints
 
 | Method | Path | Auth | Description |
