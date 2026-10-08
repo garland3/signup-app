@@ -64,8 +64,10 @@ async def test_join_team_success_targets_caller(app):
     assert r.json()["team_id"] == "team-alpha"
     sent = json.loads(member_route.calls.last.request.content)
     assert sent["team_id"] == "team-alpha"
-    # The target is always the caller's own email, never client-supplied.
-    assert sent["member"]["user_email"] == "alice@example.com"
+    # The target is always the caller's own identity, never client-supplied,
+    # matched by user_id (how ensure_user creates the LiteLLM user).
+    assert sent["member"]["user_id"] == "alice@example.com"
+    assert "user_email" not in sent["member"]
     assert sent["member"]["role"] == "user"
 
 

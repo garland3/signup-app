@@ -11,7 +11,6 @@ Implements the key management routes that the signup-app uses:
   POST /key/unblock
   GET  /team/list
   GET  /team/available
-  GET  /team/info
   POST /team/member_add
 
 Run: python -m uvicorn mocks.litellm_mock:app --port 4000
@@ -355,15 +354,6 @@ async def team_available(user_id: str = "", authorization: str = Header()):
         if not user_id or user_id not in _member_emails(t)
     ]
     return {"available_teams": available}
-
-
-@app.get("/team/info")
-async def team_info(team_id: str = "", authorization: str = Header()):
-    check_admin(authorization)
-    team = teams_db.get(team_id)
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    return team
 
 
 @app.post("/team/member_add")
