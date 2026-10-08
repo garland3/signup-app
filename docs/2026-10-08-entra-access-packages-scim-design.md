@@ -1,7 +1,9 @@
 # Design: LiteLLM team access via Entra access packages and an open-source SCIM bridge
 
 **Date:** 2026-10-08
-**Status:** Draft for discussion (no code changes yet)
+**Status:** Draft for discussion (no app code changes yet). LiteLLM behavior
+described here was verified against open-source LiteLLM 1.104.2; see
+[Verified on open-source LiteLLM](#verified-on-open-source-litellm).
 
 ## Summary
 
@@ -108,7 +110,7 @@ sequenceDiagram
     Note over MA,LL: 4. Revoke
     MA->>EG: Package expires / review denies: remove member
     PS->>BR: SCIM PATCH /Groups remove member
-    BR->>LL: /team/member_delete, then /key/block for that user's team keys
+    BR->>LL: /team/member_delete (LiteLLM also deletes the user's keys for that team)
 ```
 
 (The bridge and the key UI are the same app; the diagram shows them as one
@@ -148,17 +150,21 @@ models and budget. This app isn't in the request path, and nothing uses the
 
 When a package assignment expires, an access review denies continued access,
 or the account is disabled, Entra removes the user from the group (or sends
-`active: false`). On the next cycle the bridge:
+`active: false`). On the next cycle the bridge calls `/team/member_delete`
+for that team. **LiteLLM then deletes that user's keys for the team itself**:
+in open-source LiteLLM 1.104.2, `/team/member_delete` removes the membership
+and deletes the member's keys for that team in the same transaction (they
+are archived and audit-logged). Verified live: the key returned 401
+immediately after the call.
 
-1. calls `/team/member_delete` for that team, and
-2. lists the user's keys and calls `/key/block` on every key whose `team_id`
-   is that team.
-
-A disabled user (`active: false`) gets all of their keys blocked. Because the
-bridge handles removal itself, keys stop working on the same cycle as the
-membership change. A periodic **reconciliation run** (same code, run on a
-schedule) catches anything missed, such as a key created between a removal
-and the next cycle.
+A disabled user (`active: false`) is removed from all of their teams, which
+deletes all of their team keys. Because the bridge handles removal itself,
+keys stop working on the same cycle as the membership change. If a LiteLLM
+version ever stops deleting keys on member removal, the bridge falls back to
+`/key/block` on the user's keys for that team;
+`scripts/verify_litellm_teams_api.sh` reports which behavior a proxy has. A
+periodic **reconciliation run** catches anything missed, such as a membership
+changed by hand in LiteLLM.
 
 ## Identity and data mapping
 
@@ -224,10 +230,12 @@ No change to the rule that every key requires team membership.
 
 - No SCIM or Enterprise settings needed; the bridge uses the admin API with
   the existing `LITELLM_ADMIN_KEY`.
-- Teams created by the bridge start with **no models**, so they're safe by
-  default. A LiteLLM admin then sets models and budgets per team. (Open
-  question 4 covers whether to let the bridge apply a default template
-  instead.)
+- **A team created without a models list can use every model on the
+  proxy** (verified). So the bridge must create teams with
+  `"models": ["no-default-models"]`, which LiteLLM rejects for every model
+  (verified: HTTP 403) until a LiteLLM admin sets the team's models and
+  budget. (Open question 4 covers whether the bridge should apply a default
+  template instead.)
 
 ### Entra ID
 
@@ -256,13 +264,15 @@ No change to the rule that every key requires team membership.
   break-glass only (the next reconciliation may undo them).
 - **Identity match is the critical correctness point.** If `userName` doesn't
   equal the app's identity, users won't see their teams.
-- **Revocation reaches keys**, not just membership: the bridge blocks the
-  user's team keys when it removes them.
+- **Revocation reaches keys**, not just membership: LiteLLM deletes the
+  member's team keys on `/team/member_delete` (verified on 1.104.2; the
+  verification script checks your version).
 - **The SCIM token is a privileged credential**: it can create teams and
   change membership. Store it like the admin key, rotate it, and keep the
   SCIM path off any public route unless the provisioning service needs it.
-- **Teams start with no models**, so a newly provisioned team can't be used
-  until an admin configures it.
+- **New teams must not default to all models.** LiteLLM treats an empty
+  models list as "all models", so the bridge always sets
+  `["no-default-models"]` on creation.
 
 ## Open questions (to work through)
 
@@ -274,13 +284,14 @@ No change to the rule that every key requires team membership.
    or is the on-prem provisioning agent needed?
 3. **Identity.** Is a user's UPN the same as the email the app receives (for
    example `user@example.com`)?
-4. **New team defaults.** Should a newly provisioned team stay at "no models"
-   until an admin configures it, or should the bridge apply a default
-   template (models list, budget) from config?
+4. **New team defaults.** Should a newly provisioned team stay locked
+   (`no-default-models`) until an admin configures it, or should the bridge
+   apply a default template (models list, budget) from config?
 5. **Package design.** One package per team? Who approves? Expiry length?
    Review cadence? Any auto-assigned baseline team?
-6. **Revocation policy.** Block or delete orphaned keys? How often does
-   reconciliation run? Maximum key duration?
+6. **Revocation policy.** LiteLLM deletes a removed member's team keys
+   (verified), so the remaining questions are: how often does reconciliation
+   run, and what maximum key duration should we set?
 7. **Transition.** Turn self-join off everywhere at cutover, or run both for a
    pilot period?
 
@@ -297,9 +308,10 @@ No change to the rule that every key requires team membership.
 ## Alternatives considered
 
 - **LiteLLM's built-in `/scim/v2`.** Least code for us, but LiteLLM's docs
-  state "SCIM support requires a premium license" (Enterprise), and its
-  group-to-team and key behavior on removal would still need verifying.
-  Revisit if the project moves to Enterprise.
+  state "SCIM support requires a premium license" (Enterprise), and the
+  open-source proxy enforces it: every `/scim/v2` call returns HTTP 403,
+  even with the master key (verified). Revisit if the project moves to
+  Enterprise.
 - **Microsoft Graph pull sync instead of SCIM.** A scheduled job in this app
   reads group membership from Microsoft Graph and reconciles LiteLLM teams.
   Outbound-only (no inbound endpoint or provisioning agent), but it is
@@ -310,4 +322,34 @@ No change to the rule that every key requires team membership.
   membership only updates when the user signs in, so revocation waits for
   the next sign-in.
 - **Keep self-join on `/team/available`.** Simplest, but no approval, expiry,
-  or review, which is the gap this design closes.
+  or review, which is the gap this design closes. Also, as merged in PR #41,
+  self-join does not work against real LiteLLM: `/team/available` ignores
+  its `user_id` parameter and answers for the owner of the calling key, and
+  this app calls it with the admin key (verified; see below).
+
+## Verified on open-source LiteLLM
+
+Tested on 2026-10-08 against open-source LiteLLM **1.104.2** with
+PostgreSQL 16 and **no license key**. Re-run against your own proxy with:
+
+```bash
+LITELLM_BASE_URL=https://<litellm-host> LITELLM_ADMIN_KEY=<admin key> \
+  scripts/verify_litellm_teams_api.sh
+```
+
+The script creates a throwaway `probe-*` team, user, and keys, checks each
+call below, and deletes them.
+
+| Check | Result |
+|---|---|
+| Built-in `/scim/v2` (Users, Groups, ServiceProviderConfig), with the master key | **HTTP 403**: "only available for LiteLLM Enterprise users ... set `LITELLM_LICENSE`" |
+| `POST /team/new` with `models: ["no-default-models"]` | Works; keys in that team get **HTTP 403** for every model |
+| `POST /team/new` with no `models` | Works, but the team can use **every model** |
+| `POST /user/new` | Works |
+| `POST /team/member_add` with `member.user_id` | Works |
+| `GET /team/list?user_id=` (admin key) | Returns that user's teams |
+| `POST /team/update` (rename) | Works |
+| `POST /key/generate` with `team_id` | Works; key authenticates |
+| `POST /team/member_delete` | Works, **and deletes the member's keys for that team** (key gets HTTP 401) |
+| `GET /team/available?user_id=` (admin key) | **Ignores `user_id`**: answers for the admin key's owner (returns `[]`). Called with a key owned by the user, it returns the teams listed in `litellm_settings.default_internal_user_params.available_teams` |
+| This app's teams feature end to end (`/api/me`, team-scoped key creation, non-member team rejected) | Works, except self-join (previous row) |

@@ -134,22 +134,26 @@ turning this on.
 
 ### Requirements
 
-- A LiteLLM proxy exposing `GET /team/list`, `GET /team/available`,
-  `POST /team/member_add`, and `POST /key/generate` with `team_id`. The
-  feature was built against the LiteLLM API spec bundled in this repo
-  (`litellmopenapi.json`, LiteLLM 1.80.10); verify the behavior of your
-  deployed version, especially `/team/available` (see below).
+- A LiteLLM proxy (the open-source edition is enough) exposing
+  `GET /team/list`, `GET /team/available`, `POST /team/member_add`, and
+  `POST /key/generate` with `team_id`. Team-scoped key creation and the
+  membership checks were verified end to end against open-source LiteLLM
+  1.104.2; self-join has a known limitation (see below). Check your own
+  proxy with `scripts/verify_litellm_teams_api.sh` (see
+  [Verifying your LiteLLM](#verifying-your-litellm)).
 - `LITELLM_ADMIN_KEY` must be a proxy-admin key: `/team/member_add` is
   restricted to proxy admins and team admins.
 - Teams must already exist in LiteLLM. This app never creates or deletes
-  teams.
+  teams. **Always give each team an explicit models list**: LiteLLM treats a
+  team with no models list as allowed to use every model on the proxy.
 
 ### User workflow
 
 - **Join a team:** a "Join a team" button appears when LiteLLM offers teams
   the user can join and isn't already in. The user picks one and is added
   with role `user`. If the user doesn't exist in LiteLLM yet, it is created
-  first.
+  first. Against a real LiteLLM this list is currently always empty; see
+  [Self-join: known limitation](#self-join-known-limitation).
 - **Create a key:**
   - In **one** team: the key is scoped to that team automatically; no
     selector is shown.
@@ -202,32 +206,62 @@ While teams are enabled:
   always with role `user`, so a user cannot add other people, join
   arbitrary teams, or make themselves a team admin.
 
-### Deployment security: `/team/available` is the enrollment allowlist
+### Self-join: known limitation
 
-The join endpoint trusts LiteLLM's `/team/available` response to decide
-which teams a user may join, then uses the admin key to add them. **Any team
-LiteLLM returns there can be joined by any authenticated user.** If a
-restricted team appears in that list, users can enroll themselves into it.
+LiteLLM decides which teams are open for self-join from its own config:
 
-Before enabling teams, check what your LiteLLM returns for an ordinary user:
-
-```bash
-curl -s -H "Authorization: Bearer $LITELLM_ADMIN_KEY" \
-  "$LITELLM_BASE_URL/team/available?user_id=someone@example.com"
+```yaml
+# LiteLLM proxy config.yaml
+litellm_settings:
+  default_internal_user_params:
+    available_teams: ["<team_id>", "<team_id>"]
 ```
 
-Make sure only teams intended for self-service enrollment appear, and adjust
-your LiteLLM configuration if restricted teams show up (see your LiteLLM
-version's documentation for how available teams are configured). The mock
-server in this repo offers **every** team to every non-member, so it cannot
-catch an overbroad configuration.
+`GET /team/available` returns those teams minus the ones the user is already
+in. However, it answers for the **owner of the API key that calls it** and
+ignores any `user_id` parameter (verified on LiteLLM 1.104.2). This app calls
+it with the admin key, so against a real LiteLLM the list comes back empty:
+no "Join a team" button appears, and `POST /api/teams/join` returns 403. It
+fails closed, so nobody can join a team they shouldn't, but self-join doesn't
+work yet. (The bundled mock answers per `user_id`, which is why the tests
+didn't catch this.)
+
+Until that is fixed, assign users to teams in LiteLLM (its admin UI, or
+`POST /team/member_add`). Users then see their teams and can create keys as
+described above.
+
+To see what LiteLLM offers a given user, call it with a key **owned by that
+user**, not the admin key:
+
+```bash
+curl -s -H "Authorization: Bearer <key owned by the user>" \
+  "$LITELLM_BASE_URL/team/available"
+```
+
+Every team in `available_teams` can be joined by any user once self-join
+works, so list only teams meant for self-service enrollment.
+
+### Verifying your LiteLLM
+
+`scripts/verify_litellm_teams_api.sh` checks, against your own proxy, every
+LiteLLM call the teams feature and the proposed SCIM bridge rely on. It
+creates a throwaway `probe-*` team, user, and keys and deletes them
+afterwards:
+
+```bash
+LITELLM_BASE_URL=https://<litellm-host> LITELLM_ADMIN_KEY=<admin key> \
+  scripts/verify_litellm_teams_api.sh
+```
+
+It also reports whether LiteLLM's built-in SCIM is licensed, whether removing
+a team member revokes their team keys, and how many models a team created
+without a models list can reach.
 
 ### Rollout procedure
 
-1. Create the teams in LiteLLM.
-2. Assign existing users to their teams in LiteLLM, and/or configure which
-   teams are offered for self-join.
-3. Verify `/team/available` as shown above, for at least one ordinary user.
+1. Create the teams in LiteLLM, each with an explicit models list.
+2. Assign existing users to their teams in LiteLLM.
+3. Run `scripts/verify_litellm_teams_api.sh` against the proxy.
 4. Set `FEATURE_TEAMS_ENABLED=true` and restart the app.
 
 A proposed alternative to self-join, governing team membership with Entra ID
