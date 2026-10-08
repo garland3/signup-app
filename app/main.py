@@ -68,6 +68,16 @@ def _enforce_startup_safety(settings) -> None:
                 "ALLOW_INSECURE_STARTUP=true"
             )
 
+    if settings.MAX_KEY_DURATION:
+        from app.routes.keys import _DURATION_RE
+
+        match = _DURATION_RE.fullmatch(settings.MAX_KEY_DURATION)
+        if not match or int(match.group(1)) <= 0:
+            problems.append(
+                f"MAX_KEY_DURATION={settings.MAX_KEY_DURATION!r} is not a "
+                "duration such as 90d or 3mo (units: s, m, h, d, mo)"
+            )
+
     if settings.AUTH_MODE == "oauth" and not settings.SESSION_SECRET:
         problems.append("SESSION_SECRET must be set when AUTH_MODE=oauth")
 
