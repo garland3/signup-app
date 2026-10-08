@@ -72,7 +72,7 @@ and an audit log. SCIM keeps LiteLLM in sync automatically.
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as User (will@llnl.gov)
+    actor U as User (user@example.com)
     participant MA as My Access
     participant AP as Approver
     participant EG as Entra group
@@ -273,7 +273,7 @@ No change to the rule that every key requires team membership.
 2. **Reachability.** Can Entra's cloud provisioning service reach this app,
    or is the on-prem provisioning agent needed?
 3. **Identity.** Is a user's UPN the same as the email the app receives (for
-   example `will@llnl.gov`)?
+   example `user@example.com`)?
 4. **New team defaults.** Should a newly provisioned team stay at "no models"
    until an admin configures it, or should the bridge apply a default
    template (models list, budget) from config?
