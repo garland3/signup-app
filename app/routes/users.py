@@ -18,20 +18,25 @@ async def me(request: Request):
         "auth_mode": s.AUTH_MODE,
     }
     if s.FEATURE_TEAMS_ENABLED:
-        # The teams the user already belongs to, for the team-scoped key
-        # selector. /api/me must stay resilient, so an upstream failure
-        # degrades to an empty list rather than failing the whole call.
-        payload["teams"] = await _safe_user_teams(request.state.user_email)
+        # The teams the user belongs to, for the team-scoped key selector.
+        # /api/me must stay resilient, so an upstream failure doesn't fail
+        # the whole call; instead teams_unavailable tells the UI the list is
+        # unknown (not empty), so it can show an error rather than treat the
+        # user as having no teams. Key creation re-checks membership itself
+        # and fails closed.
+        teams, ok = await _load_user_teams(request.state.user_email)
+        payload["teams"] = teams
+        payload["teams_unavailable"] = not ok
     return payload
 
 
-async def _safe_user_teams(user_email: str) -> list[dict]:
+async def _load_user_teams(user_email: str) -> tuple[list[dict], bool]:
     try:
         client = LiteLLMClient(get_settings())
         teams = await client.list_teams(user_id=user_email)
     except Exception as e:
         logger.warning("Could not load teams for %s: %s", user_email, e)
-        return []
+        return [], False
     out = []
     for t in teams:
         team_id = t.get("team_id")
@@ -39,4 +44,4 @@ async def _safe_user_teams(user_email: str) -> list[dict]:
             out.append(
                 {"team_id": team_id, "team_alias": t.get("team_alias") or team_id}
             )
-    return out
+    return out, True

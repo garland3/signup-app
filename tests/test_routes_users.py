@@ -41,16 +41,20 @@ async def test_me_includes_teams_when_feature_enabled():
     assert r.status_code == 200
     body = r.json()
     assert body["teams"] == [{"team_id": "team-alpha", "team_alias": "Alpha Team"}]
+    assert body["teams_unavailable"] is False
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_me_teams_degrades_to_empty_on_upstream_error():
+async def test_me_flags_teams_unavailable_on_upstream_error():
     from tests.conftest import create_test_app
     app = create_test_app(teams_enabled=True)
     respx.get(f"{LITELLM}/team/list").mock(return_value=Response(500, json={}))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.get("/api/me", headers=AUTH)
-    # /api/me must stay resilient even if the teams lookup fails.
+    # /api/me stays resilient, but flags the list as unknown rather than
+    # presenting it as "no teams".
     assert r.status_code == 200
-    assert r.json()["teams"] == []
+    body = r.json()
+    assert body["teams"] == []
+    assert body["teams_unavailable"] is True

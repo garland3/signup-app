@@ -47,8 +47,8 @@ class CreateKeyRequest(BaseModel):
     rpm_limit: int | None = None
     tpm_limit: int | None = None
     metadata: dict[str, str] | None = None
-    # Optional team to scope the key to. Only honored when
-    # FEATURE_TEAMS_ENABLED and the team is one the caller belongs to.
+    # Team to scope the key to. Required when FEATURE_TEAMS_ENABLED (must be
+    # a team the caller belongs to); ignored when the feature is off.
     team_id: str | None = None
 
 
@@ -286,12 +286,18 @@ async def create_key(body: CreateKeyRequest, request: Request):
                 ),
             )
 
-    # Team-scoped keys: a client-supplied team_id is only honored when the
-    # teams feature is on AND the team is one the caller actually belongs to,
-    # so a user cannot create keys under a team they are not in. Validate
-    # before provisioning anything so an invalid team never creates a user.
+    # Team-scoped keys: when the teams feature is on, every key must belong
+    # to a team the caller is a member of, so teams can act as an access and
+    # budget boundary. Fail closed: no team_id, a team the caller isn't in,
+    # or a failed membership lookup all block creation. Validate before
+    # provisioning anything so a rejected request never creates a user.
     team_id = None
-    if settings.FEATURE_TEAMS_ENABLED and body.team_id:
+    if settings.FEATURE_TEAMS_ENABLED:
+        if not body.team_id:
+            raise HTTPException(
+                status_code=400,
+                detail="A team is required. Join a team before creating a key.",
+            )
         try:
             teams = await client.list_teams(user_id=user_email)
         except Exception as e:

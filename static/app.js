@@ -4,6 +4,12 @@ var currentKeys = [];
 var userTeams = [];
 // Teams the current user may self-join (populated from /api/teams/available).
 var availableTeams = [];
+// True when the server has the teams feature on (/api/me returns a teams
+// list). Every key must then belong to one of the user's teams.
+var teamsEnabled = false;
+// True when the server couldn't load the user's teams (list is unknown, not
+// empty), so key creation is blocked rather than guessed.
+var teamsUnavailable = false;
 var appConfig = {
     app_name: "API Keys",
     required_metadata: [],
@@ -161,9 +167,22 @@ async function loadUser() {
             logoutForm.action = API_BASE + "/auth/logout";
             logoutForm.classList.remove("hidden");
         }
+        teamsEnabled = Array.isArray(data.teams);
+        teamsUnavailable = !!data.teams_unavailable;
         userTeams = data.teams || [];
         renderTeamSelect();
     }
+}
+
+// When teams are enabled every key needs a team, so return the reason key
+// creation is blocked (or null when it isn't).
+function teamRequirementError() {
+    if (!teamsEnabled) return null;
+    if (teamsUnavailable) {
+        return "Couldn't load your teams right now, so keys can't be created. Try again later.";
+    }
+    if (userTeams.length === 0) return "Join a team before creating a key.";
+    return null;
 }
 
 // Populate the create-key team selector from the user's teams. The row is
@@ -280,6 +299,8 @@ function showCreateModal() {
     });
     renderTeamSelect();
     clearCreateError();
+    var teamErr = teamRequirementError();
+    if (teamErr) showCreateError(teamErr);
     document.getElementById("create-modal").classList.remove("hidden");
     document.getElementById("key-name").focus();
 }
@@ -345,6 +366,12 @@ async function createKey() {
     }
 
     clearCreateError();
+
+    var teamErr = teamRequirementError();
+    if (teamErr) {
+        showCreateError(teamErr);
+        return;
+    }
 
     var body = {name: name};
 

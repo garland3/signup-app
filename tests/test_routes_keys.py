@@ -1076,3 +1076,36 @@ async def test_create_key_team_id_ignored_when_feature_disabled(app):
     assert r.status_code == 201
     sent = json.loads(gen.calls.last.request.content)
     assert "team_id" not in sent
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_without_team_rejected_when_teams_enabled():
+    from tests.conftest import create_test_app
+    app = create_test_app(teams_enabled=True)
+    # No upstream routes mocked: the request must be refused before any
+    # LiteLLM call, so no user or key is provisioned.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k"}, headers=AUTH)
+
+    assert r.status_code == 400
+    assert "team is required" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_fails_closed_on_team_lookup_outage():
+    from tests.conftest import create_test_app
+    app = create_test_app(teams_enabled=True)
+    respx.get(f"{LITELLM}/team/list").mock(return_value=Response(500, json={}))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "k", "team_id": "team-alpha"},
+            headers=AUTH,
+        )
+
+    # A membership-lookup outage must block creation, never fall back to an
+    # unscoped key.
+    assert r.status_code == 502
