@@ -1109,3 +1109,125 @@ async def test_create_key_fails_closed_on_team_lookup_outage():
     # A membership-lookup outage must block creation, never fall back to an
     # unscoped key.
     assert r.status_code == 502
+
+
+@pytest.fixture
+def max_duration():
+    """Set MAX_KEY_DURATION for one test, restoring it afterwards."""
+    from app.core.config import get_settings
+
+    s = get_settings()
+    original = s.MAX_KEY_DURATION
+
+    def _set(value):
+        s.MAX_KEY_DURATION = value
+
+    yield _set
+    s.MAX_KEY_DURATION = original
+
+
+def _mock_generate():
+    return respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_cap",
+            "key_alias": "alice@example.com-CapKey",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+        })
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_without_duration_gets_max(app, max_duration):
+    """With MAX_KEY_DURATION, a key created without a duration gets it."""
+    max_duration("90d")
+    mock_ensure_user()
+    generate_route = _mock_generate()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "CapKey"}, headers=AUTH)
+
+    assert r.status_code == 201
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["duration"] == "90d"
+    assert sent["metadata"]["duration"] == "90d"
+
+
+@pytest.mark.parametrize("duration", ["30d", "90d", "2mo", "12h", "1s"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_within_max_duration(app, max_duration, duration):
+    max_duration("90d")
+    mock_ensure_user()
+    generate_route = _mock_generate()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "CapKey", "duration": duration}, headers=AUTH)
+
+    assert r.status_code == 201, f"expected 201 for duration={duration!r}"
+    import json
+    assert json.loads(generate_route.calls[0].request.content)["duration"] == duration
+
+
+@pytest.mark.parametrize("duration", ["91d", "4mo", "3000h"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_over_max_duration_rejected(app, max_duration, duration):
+    """A longer duration than MAX_KEY_DURATION is refused before any upstream call."""
+    max_duration("90d")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "CapKey", "duration": duration}, headers=AUTH)
+
+    assert r.status_code == 400, f"expected 400 for duration={duration!r}"
+    assert "90d" in r.json()["detail"]
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_over_max_duration_rejected(app, max_duration):
+    """PATCH can't extend a key past MAX_KEY_DURATION either."""
+    max_duration("30d")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "31d"}, headers=AUTH)
+
+    assert r.status_code == 400
+    assert len(respx.calls) == 0
+
+
+def test_within_compares_months_conservatively():
+    from app.routes.keys import _within
+
+    assert _within("1mo", "1mo")
+    assert _within("28d", "1mo")
+    assert not _within("29d", "1mo")   # a month may be 28 days
+    assert _within("3mo", "93d")       # three months are at most 93 days
+    assert not _within("3mo", "90d")   # ... and may be more than 90
+    assert _within("24h", "1d")
+    assert not _within("25h", "1d")
+
+
+@pytest.mark.asyncio
+async def test_get_config_reports_max_key_duration(app, max_duration):
+    max_duration("90d")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/config", headers=AUTH)
+    assert r.json()["max_key_duration"] == "90d"
+
+
+def test_startup_rejects_malformed_max_key_duration():
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(
+        MAX_KEY_DURATION="90 days",
+        FEATURE_PROXY_SECRET_ENABLED=False,
+        ALLOW_INSECURE_STARTUP=True,
+    )
+    with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
+        _enforce_startup_safety(s)
