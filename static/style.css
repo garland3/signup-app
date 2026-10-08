@@ -225,13 +225,15 @@ td {
     color: #374151;
 }
 
-.modal-content input {
+.modal-content input,
+.modal-content select {
     width: 100%;
     padding: 8px 12px;
     border: 1px solid #d1d5db;
     border-radius: 6px;
     font-size: 14px;
     margin-bottom: 16px;
+    background: white;
 }
 
 .modal-actions {

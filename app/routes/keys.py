@@ -47,6 +47,9 @@ class CreateKeyRequest(BaseModel):
     rpm_limit: int | None = None
     tpm_limit: int | None = None
     metadata: dict[str, str] | None = None
+    # Team to scope the key to. Required when FEATURE_TEAMS_ENABLED (must be
+    # a team the caller belongs to); ignored when the feature is off.
+    team_id: str | None = None
 
 
 class UpdateKeyRequest(BaseModel):
@@ -90,6 +93,8 @@ def _format_key_response(key_data: dict, include_full_key: str | None = None) ->
         "rpm_limit": key_data.get("rpm_limit"),
         "tpm_limit": key_data.get("tpm_limit"),
         "user_id": key_data.get("user_id", ""),
+        "team_id": key_data.get("team_id"),
+        "team_alias": key_data.get("team_alias"),
         "metadata": metadata if isinstance(metadata, dict) else {},
     }
     if include_full_key:
@@ -281,6 +286,28 @@ async def create_key(body: CreateKeyRequest, request: Request):
                 ),
             )
 
+    # Team-scoped keys: when the teams feature is on, every key must belong
+    # to a team the caller is a member of, so teams can act as an access and
+    # budget boundary. Fail closed: no team_id, a team the caller isn't in,
+    # or a failed membership lookup all block creation. Validate before
+    # provisioning anything so a rejected request never creates a user.
+    team_id = None
+    if settings.FEATURE_TEAMS_ENABLED:
+        if not body.team_id:
+            raise HTTPException(
+                status_code=400,
+                detail="A team is required. Join a team before creating a key.",
+            )
+        try:
+            teams = await client.list_teams(user_id=user_email)
+        except Exception as e:
+            raise _upstream_error("list_teams", e)
+        if body.team_id not in {t.get("team_id") for t in teams}:
+            raise HTTPException(
+                status_code=400, detail="Invalid team for this user"
+            )
+        team_id = body.team_id
+
     # Ensure the user exists in LiteLLM before creating a key
     try:
         await client.ensure_user(user_email)
@@ -296,6 +323,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
         "key_alias": key_name,
         "metadata": metadata,
     }
+    if team_id:
+        kwargs["team_id"] = team_id
     if body.duration:
         kwargs["duration"] = body.duration
     if body.models:

@@ -24,6 +24,7 @@
 
         <div class="actions">
             <button id="create-btn">Create new key</button>
+            <button id="join-team-btn" class="hidden">Join a team</button>
         </div>
 
         <table id="keys-table">
@@ -55,11 +56,29 @@
             <input type="text" id="key-duration" placeholder="e.g. 30d, 90d, 1mo" pattern="[0-9]+(s|m|h|d|mo)" title="Positive integer followed by s, m, h, d, or mo. Examples: 30s, 30m, 30h, 30d, 1mo">
             <label for="key-budget">Max Budget $ (optional)</label>
             <input type="number" id="key-budget" placeholder="e.g. 100" step="0.01">
+            <div id="key-team-row" class="hidden">
+                <label for="key-team">Team</label>
+                <select id="key-team"></select>
+            </div>
             <div id="required-metadata-fields"></div>
             <div id="create-error" class="form-error hidden" role="alert"></div>
             <div class="modal-actions">
                 <button id="create-cancel-btn">Cancel</button>
                 <button id="create-submit-btn" class="primary">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Join Team Modal -->
+    <div id="join-team-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>Join a team</h2>
+            <label for="join-team-select">Team</label>
+            <select id="join-team-select"></select>
+            <div id="join-team-error" class="form-error hidden" role="alert"></div>
+            <div class="modal-actions">
+                <button id="join-team-cancel-btn">Cancel</button>
+                <button id="join-team-submit-btn" class="primary">Join</button>
             </div>
         </div>
     </div>

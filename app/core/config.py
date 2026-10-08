@@ -7,6 +7,11 @@ class Settings(BaseSettings):
     # Core
     DEBUG_MODE: bool = False
     APP_NAME: str = "API Keys"
+    # Enable the LiteLLM teams features (self-service team join + team-scoped
+    # API keys). Off by default so proxy-only deployments without teams are
+    # unaffected; when False the /api/teams routes 404, /api/me omits teams,
+    # and the create-key team selector never appears.
+    FEATURE_TEAMS_ENABLED: bool = False
     # Optional URL path prefix the app is served under (e.g. "/start").
     # When set, all routes, static assets, and auth redirects are served
     # beneath this prefix. Leave blank to serve from the site root.

@@ -45,6 +45,25 @@ def _is_duplicate_alias_error(body: object) -> bool:
     return "already exist" in msg or "unique" in msg
 
 
+def _extract_team_list(body: object) -> list[dict]:
+    """Normalize a LiteLLM team-listing payload into a list of team dicts.
+
+    LiteLLM's ``/team/list`` and ``/team/available`` have returned either a
+    bare JSON array or an object wrapping the array under ``teams`` /
+    ``available_teams``, depending on version. Accept all of these and
+    ignore any non-dict entries.
+    """
+    if isinstance(body, dict):
+        for key in ("teams", "available_teams", "results"):
+            value = body.get(key)
+            if isinstance(value, list):
+                body = value
+                break
+    if not isinstance(body, list):
+        return []
+    return [t for t in body if isinstance(t, dict)]
+
+
 class LiteLLMClient:
     """Client for LiteLLM proxy admin API. Uses the master key for auth.
 
@@ -202,6 +221,60 @@ class LiteLLMClient:
         r = await self._client().post(
             "/key/unblock",
             json={"key": key},
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def list_teams(self, user_id: str) -> list[dict]:
+        """GET /team/list?user_id=... -> teams the user already belongs to.
+
+        LiteLLM has returned this payload as a bare list in some versions
+        and as ``{"teams": [...]}`` in others, so normalize both shapes.
+        """
+        r = await self._client().get(
+            "/team/list",
+            params={"user_id": user_id},
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return _extract_team_list(r.json())
+
+    async def list_available_teams(self, user_id: str) -> list[dict]:
+        """GET /team/available?user_id=... -> teams the user may join.
+
+        Normalizes the list / ``{"available_teams": [...]}`` / ``{"teams": [...]}``
+        shapes LiteLLM has used.
+        """
+        r = await self._client().get(
+            "/team/available",
+            params={"user_id": user_id},
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return _extract_team_list(r.json())
+
+    async def add_team_member(
+        self, team_id: str, user_id: str, role: str = "user"
+    ) -> dict:
+        """POST /team/member_add
+
+        Adds a single member to an existing team, matched by ``user_id``.
+        Users are created with ``user_id=<email>`` and no ``user_email``
+        (see ``create_user``), and LiteLLM creates a new user row when
+        ``member_add`` can't match the member, so matching by ``user_email``
+        could attach the team to a duplicate user. ``role`` is one of
+        LiteLLM's team roles ("user" or "admin"); callers that expose this to
+        end users must keep it pinned to "user" so a user cannot grant
+        themselves team-admin.
+        """
+        body = {
+            "team_id": team_id,
+            "member": {"user_id": user_id, "role": role},
+        }
+        r = await self._client().post(
+            "/team/member_add",
+            json=body,
             headers=self._headers(),
         )
         r.raise_for_status()

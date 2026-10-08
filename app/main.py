@@ -14,6 +14,7 @@ from app.routes.dashboard import router as dashboard_router
 from app.routes.health import router as health_router
 from app.routes.users import router as users_router
 from app.routes.keys import router as keys_router
+from app.routes.teams import router as teams_router
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,7 @@ def create_app():
     app.include_router(auth_router, prefix=root_path)
     app.include_router(users_router, prefix=root_path)
     app.include_router(keys_router, prefix=root_path)
+    app.include_router(teams_router, prefix=root_path)
     app.include_router(dashboard_router, prefix=root_path)
 
     if STATIC_DIR.exists():

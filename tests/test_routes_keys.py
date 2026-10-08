@@ -975,3 +975,137 @@ async def test_strip_user_domain():
         r = await c.get("/api/me", headers={"X-User-Email": "alice@corp.com"})
     assert r.status_code == 200
     assert r.json()["email"] == "alice"
+
+
+# ---------------------------------------------------------------------------
+# Team-scoped key creation (FEATURE_TEAMS_ENABLED)
+# ---------------------------------------------------------------------------
+
+_TEAM_KEY_RESPONSE = {
+    "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+    "token_id": "tok_team",
+    "key_alias": "alice@example.com-teamkey",
+    "user_id": "alice@example.com",
+    "team_id": "team-alpha",
+    "created_at": "2026-03-09T00:00:00Z",
+    "expires": None,
+    "spend": 0,
+    "max_budget": None,
+    "models": [],
+    "blocked": False,
+}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_with_team_id_forwards():
+    import json
+    from tests.conftest import create_test_app
+    app = create_test_app(teams_enabled=True)
+    respx.get(f"{LITELLM}/team/list").mock(
+        return_value=Response(200, json=[{"team_id": "team-alpha"}])
+    )
+    mock_ensure_user()
+    gen = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json=_TEAM_KEY_RESPONSE)
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "teamkey", "team_id": "team-alpha"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 201
+    sent = json.loads(gen.calls.last.request.content)
+    assert sent["team_id"] == "team-alpha"
+    assert r.json()["team_id"] == "team-alpha"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_invalid_team_returns_400():
+    from tests.conftest import create_test_app
+    app = create_test_app(teams_enabled=True)
+    # Caller belongs only to team-beta, so team-alpha must be rejected before
+    # any user/key is provisioned.
+    respx.get(f"{LITELLM}/team/list").mock(
+        return_value=Response(200, json=[{"team_id": "team-beta"}])
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "teamkey", "team_id": "team-alpha"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_team_id_ignored_when_feature_disabled(app):
+    import json
+    # Default app has teams disabled: a stray team_id must not be forwarded
+    # and must not trigger a /team/list lookup.
+    mock_ensure_user()
+    gen = respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_noteam",
+            "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+            "expires": None,
+            "spend": 0,
+            "max_budget": None,
+            "models": [],
+            "blocked": False,
+        })
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "k", "team_id": "team-alpha"},
+            headers=AUTH,
+        )
+
+    assert r.status_code == 201
+    sent = json.loads(gen.calls.last.request.content)
+    assert "team_id" not in sent
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_without_team_rejected_when_teams_enabled():
+    from tests.conftest import create_test_app
+    app = create_test_app(teams_enabled=True)
+    # No upstream routes mocked: the request must be refused before any
+    # LiteLLM call, so no user or key is provisioned.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k"}, headers=AUTH)
+
+    assert r.status_code == 400
+    assert "team is required" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_fails_closed_on_team_lookup_outage():
+    from tests.conftest import create_test_app
+    app = create_test_app(teams_enabled=True)
+    respx.get(f"{LITELLM}/team/list").mock(return_value=Response(500, json={}))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post(
+            "/api/keys",
+            json={"name": "k", "team_id": "team-alpha"},
+            headers=AUTH,
+        )
+
+    # A membership-lookup outage must block creation, never fall back to an
+    # unscoped key.
+    assert r.status_code == 502
