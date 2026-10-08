@@ -9,7 +9,8 @@ Govern who belongs to which LiteLLM team with **Microsoft Entra ID access
 packages**, and keep LiteLLM in sync over **SCIM 2.0** (an open standard,
 RFC 7643/7644). The SCIM endpoint is a small **open-source bridge in this
 app**, not LiteLLM's own `/scim/v2`, which we don't use because it is part of
-LiteLLM Enterprise and we are on the open-source edition. The bridge turns
+LiteLLM Enterprise (LiteLLM's docs: "SCIM support requires a premium
+license") and we are on the open-source edition. The bridge turns
 SCIM users, groups, and memberships into calls to LiteLLM's **open-source
 admin API** (`/team/new`, `/team/member_add`, `/team/member_delete`,
 `/key/block`, ...), the same API this app already uses.
@@ -295,9 +296,10 @@ No change to the rule that every key requires team membership.
 
 ## Alternatives considered
 
-- **LiteLLM's built-in `/scim/v2`.** Least code for us, but it is part of
-  LiteLLM Enterprise, and its group-to-team and key behavior on removal would
-  still need verifying. Revisit if the project moves to Enterprise.
+- **LiteLLM's built-in `/scim/v2`.** Least code for us, but LiteLLM's docs
+  state "SCIM support requires a premium license" (Enterprise), and its
+  group-to-team and key behavior on removal would still need verifying.
+  Revisit if the project moves to Enterprise.
 - **Microsoft Graph pull sync instead of SCIM.** A scheduled job in this app
   reads group membership from Microsoft Graph and reconciles LiteLLM teams.
   Outbound-only (no inbound endpoint or provisioning agent), but it is
