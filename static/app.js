@@ -1,4 +1,9 @@
 var currentKeys = [];
+// Teams the current user belongs to (populated from /api/me when the teams
+// feature is enabled). Drives the team selector in the create-key modal.
+var userTeams = [];
+// Teams the current user may self-join (populated from /api/teams/available).
+var availableTeams = [];
 var appConfig = {
     app_name: "API Keys",
     required_metadata: [],
@@ -156,6 +161,30 @@ async function loadUser() {
             logoutForm.action = API_BASE + "/auth/logout";
             logoutForm.classList.remove("hidden");
         }
+        userTeams = data.teams || [];
+        renderTeamSelect();
+    }
+}
+
+// Populate the create-key team selector from the user's teams. The row is
+// only shown when the user belongs to more than one team; with exactly one
+// team the key is scoped to it implicitly (no choice to make), and with none
+// the row stays hidden.
+function renderTeamSelect() {
+    var row = document.getElementById("key-team-row");
+    var select = document.getElementById("key-team");
+    if (!row || !select) return;
+    select.textContent = "";
+    userTeams.forEach(function(t) {
+        var opt = document.createElement("option");
+        opt.value = t.team_id;
+        opt.textContent = t.team_alias || t.team_id;
+        select.appendChild(opt);
+    });
+    if (userTeams.length > 1) {
+        row.classList.remove("hidden");
+    } else {
+        row.classList.add("hidden");
     }
 }
 
@@ -249,6 +278,7 @@ function showCreateModal() {
         var el = document.getElementById("meta-" + f);
         if (el) el.value = "";
     });
+    renderTeamSelect();
     clearCreateError();
     document.getElementById("create-modal").classList.remove("hidden");
     document.getElementById("key-name").focus();
@@ -334,6 +364,15 @@ async function createKey() {
     var budget = document.getElementById("key-budget").value.trim();
     if (budget) body.max_budget = parseFloat(budget);
 
+    // Scope the key to a team. With exactly one team it is implicit; with
+    // more than one the user picks from the (visible) dropdown.
+    if (userTeams.length === 1) {
+        body.team_id = userTeams[0].team_id;
+    } else if (userTeams.length > 1) {
+        var teamSel = document.getElementById("key-team");
+        if (teamSel && teamSel.value) body.team_id = teamSel.value;
+    }
+
     var metadata = {};
     var missing = [];
     (appConfig.required_metadata || []).forEach(function(f) {
@@ -415,6 +454,96 @@ function formatDate(dateStr) {
     });
 }
 
+// --- Self-service team join ------------------------------------------------
+
+async function loadAvailableTeams() {
+    var btn = document.getElementById("join-team-btn");
+    var r;
+    try {
+        r = await fetch(API_BASE + "/teams/available");
+    } catch (e) {
+        return;
+    }
+    // 404 => teams feature disabled; leave the button hidden.
+    if (!r.ok) return;
+    availableTeams = await r.json();
+    if (!btn) return;
+    if (availableTeams.length > 0) {
+        btn.classList.remove("hidden");
+    } else {
+        btn.classList.add("hidden");
+    }
+}
+
+function showJoinModal() {
+    var select = document.getElementById("join-team-select");
+    if (select) {
+        select.textContent = "";
+        availableTeams.forEach(function(t) {
+            var opt = document.createElement("option");
+            opt.value = t.team_id;
+            opt.textContent = t.team_alias || t.team_id;
+            select.appendChild(opt);
+        });
+    }
+    clearJoinError();
+    document.getElementById("join-team-modal").classList.remove("hidden");
+}
+
+function hideJoinModal() {
+    document.getElementById("join-team-modal").classList.add("hidden");
+    clearJoinError();
+}
+
+function showJoinError(message) {
+    var el = document.getElementById("join-team-error");
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove("hidden");
+}
+
+function clearJoinError() {
+    var el = document.getElementById("join-team-error");
+    if (!el) return;
+    el.textContent = "";
+    el.classList.add("hidden");
+}
+
+async function joinTeam() {
+    var select = document.getElementById("join-team-select");
+    var teamId = select ? select.value : "";
+    if (!teamId) return;
+    clearJoinError();
+    var r;
+    try {
+        r = await fetch(API_BASE + "/teams/join", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({team_id: teamId}),
+        });
+    } catch (e) {
+        showJoinError("Network error. Please try again.");
+        return;
+    }
+    if (!r.ok) {
+        var err = await r.json().catch(function() { return {}; });
+        showJoinError("Failed to join team: " + (err.detail || r.statusText));
+        return;
+    }
+    hideJoinModal();
+    showToast("Joined team", "success");
+    // Refresh membership (feeds the create-key dropdown) and the join list.
+    await loadUser();
+    await loadAvailableTeams();
+}
+
+var joinBtn = document.getElementById("join-team-btn");
+if (joinBtn) joinBtn.addEventListener("click", showJoinModal);
+var joinCancel = document.getElementById("join-team-cancel-btn");
+if (joinCancel) joinCancel.addEventListener("click", hideJoinModal);
+var joinSubmit = document.getElementById("join-team-submit-btn");
+if (joinSubmit) joinSubmit.addEventListener("click", joinTeam);
+
 document.getElementById("create-btn").addEventListener("click", showCreateModal);
 document.getElementById("create-cancel-btn").addEventListener("click", hideCreateModal);
 document.getElementById("create-submit-btn").addEventListener("click", createKey);
@@ -424,4 +553,5 @@ document.getElementById("show-key-done-btn").addEventListener("click", hideShowK
 loadConfig().then(function() {
     loadUser();
     loadKeys();
+    loadAvailableTeams();
 });

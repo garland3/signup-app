@@ -13,6 +13,13 @@ def test_default_settings():
     assert s.ALLOW_TEST_USER is False
     assert s.ALLOW_INSECURE_STARTUP is False
     assert s.SHOW_PROJECT_TASK_BREAKDOWN is True
+    # Teams feature is opt-in.
+    assert s.FEATURE_TEAMS_ENABLED is False
+
+
+def test_feature_teams_enabled_toggle():
+    s = Settings(LITELLM_ADMIN_KEY="sk-test", FEATURE_TEAMS_ENABLED=True)
+    assert s.FEATURE_TEAMS_ENABLED is True
 
 
 def test_debug_mode_enabled():

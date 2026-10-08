@@ -9,6 +9,10 @@ Implements the key management routes that the signup-app uses:
   POST /key/delete
   POST /key/block
   POST /key/unblock
+  GET  /team/list
+  GET  /team/available
+  GET  /team/info
+  POST /team/member_add
 
 Run: python -m uvicorn mocks.litellm_mock:app --port 4000
 """
@@ -26,8 +30,37 @@ app = FastAPI(title="Mock LiteLLM Proxy")
 # In-memory stores
 keys_db: dict[str, dict] = {}
 users_db: dict[str, dict] = {}
+# Teams keyed by team_id. members_with_roles is the source of truth for
+# membership; a user's own `teams` list (on the user record) is derived from it.
+teams_db: dict[str, dict] = {
+    "team-alpha": {
+        "team_id": "team-alpha",
+        "team_alias": "Alpha Team",
+        "members_with_roles": [],
+    },
+    "team-beta": {
+        "team_id": "team-beta",
+        "team_alias": "Beta Team",
+        "members_with_roles": [],
+    },
+}
 
 ADMIN_KEY = "sk-mock-admin-key"
+
+
+def _member_emails(team: dict) -> set[str]:
+    out = set()
+    for m in team.get("members_with_roles", []):
+        email = m.get("user_id") or m.get("user_email")
+        if email:
+            out.add(email)
+    return out
+
+
+def _user_team_ids(user_id: str) -> list[str]:
+    return [
+        tid for tid, team in teams_db.items() if user_id in _member_emails(team)
+    ]
 
 
 def check_admin(authorization: str = Header()):
@@ -45,6 +78,7 @@ class GenerateKeyRequest(BaseModel):
     rpm_limit: int | None = None
     tpm_limit: int | None = None
     metadata: dict = {}
+    team_id: str | None = None
 
 
 class UpdateKeyRequest(BaseModel):
@@ -75,6 +109,19 @@ class NewUserRequest(BaseModel):
     user_email: str = ""
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    teams: list[str] = []
+    team_id: str | None = None
+
+
+class TeamMember(BaseModel):
+    user_id: str | None = None
+    user_email: str | None = None
+    role: str = "user"
+
+
+class TeamMemberAddRequest(BaseModel):
+    team_id: str
+    member: TeamMember | list[TeamMember]
 
 
 @app.post("/user/new")
@@ -91,6 +138,17 @@ async def create_user(body: NewUserRequest, authorization: str = Header()):
         "created_at": now,
     }
     users_db[body.user_id] = user
+    # Honor any teams specified at creation time by recording membership.
+    requested = list(body.teams)
+    if body.team_id:
+        requested.append(body.team_id)
+    for tid in requested:
+        team = teams_db.get(tid)
+        if team and body.user_id not in _member_emails(team):
+            team["members_with_roles"].append(
+                {"user_id": body.user_id, "role": "user"}
+            )
+    user["teams"] = _user_team_ids(body.user_id)
     return user
 
 
@@ -116,6 +174,8 @@ async def get_user(user_id: str = "", authorization: str = Header()):
         for r in daily_activity_db.get(user_id, [])
     )
     record["spend"] = round(spend_total, 6)
+    # Teams the user belongs to (list of team_ids), mirroring real LiteLLM.
+    record["teams"] = _user_team_ids(user_id)
     return record
 
 
@@ -167,6 +227,7 @@ async def generate_key(body: GenerateKeyRequest, authorization: str = Header()):
         "tpm_limit": body.tpm_limit,
         "blocked": False,
         "metadata": body.metadata,
+        "team_id": body.team_id,
     }
 
     keys_db[token] = key_record
@@ -274,6 +335,64 @@ async def unblock_key(body: BlockKeyRequest, authorization: str = Header()):
         raise HTTPException(status_code=404, detail="Key not found")
     keys_db[found]["blocked"] = False
     return keys_db[found]
+
+
+@app.get("/team/list")
+async def team_list(user_id: str = "", authorization: str = Header()):
+    check_admin(authorization)
+    teams = list(teams_db.values())
+    if user_id:
+        teams = [t for t in teams if user_id in _member_emails(t)]
+    return teams
+
+
+@app.get("/team/available")
+async def team_available(user_id: str = "", authorization: str = Header()):
+    check_admin(authorization)
+    # Teams the user may join = every team they are not already a member of.
+    available = [
+        t for t in teams_db.values()
+        if not user_id or user_id not in _member_emails(t)
+    ]
+    return {"available_teams": available}
+
+
+@app.get("/team/info")
+async def team_info(team_id: str = "", authorization: str = Header()):
+    check_admin(authorization)
+    team = teams_db.get(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return team
+
+
+@app.post("/team/member_add")
+async def team_member_add(
+    body: TeamMemberAddRequest, authorization: str = Header()
+):
+    check_admin(authorization)
+    team = teams_db.get(body.team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    members = body.member if isinstance(body.member, list) else [body.member]
+    for m in members:
+        email = m.user_id or m.user_email
+        if not email:
+            continue
+        if email in _member_emails(team):
+            raise HTTPException(
+                status_code=400,
+                detail=f"User {email} is already in team {body.team_id}",
+            )
+        team["members_with_roles"].append(
+            {"user_id": email, "role": m.role or "user"}
+        )
+
+    return {
+        "team_id": body.team_id,
+        "members_with_roles": team["members_with_roles"],
+    }
 
 
 @app.get("/health")
