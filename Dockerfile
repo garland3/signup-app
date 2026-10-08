@@ -1,11 +1,12 @@
 # Two-stage build on Red Hat Hardened Images (Project Hummingbird).
 #
-# Base images are pinned by digest to a fixed Python 3.11 variant
-# (3.11.15-builder / 3.11.15) so the build is reproducible and the runtime
-# Python stays aligned with pyproject.toml (requires-python >=3.11) and CI
-# (`uv python install 3.11`). The human-readable tag is kept alongside the
-# digest for clarity; podman/docker resolve by digest. Refresh both the tag
-# and the digest together when bumping the base image.
+# Base images are pinned by digest to a fixed Python 3.14 variant
+# (3.14.7-builder / 3.14.7) so the build is reproducible. CI runs the test
+# suite on this same Python (the "Test (Python 3.14)" job) in addition to the
+# 3.11 floor from pyproject.toml (requires-python >=3.11). The human-readable
+# tag is kept alongside the digest for clarity; podman/docker resolve by
+# digest. Refresh both the tag and the digest together when bumping the base
+# image, and keep the CI job's Python version in step.
 
 # Build stage: Hardened Images Python builder (retains a shell, pip, and build
 # tooling so we can resolve and install dependencies into an isolated venv).
@@ -34,7 +35,7 @@ RUN python3 -m pip install --no-cache-dir uv && \
     uv sync --frozen --no-dev
 
 # Runtime stage: minimal distroless Hardened Image (no shell, no package
-# manager) for a near-zero-CVE footprint, pinned to the matching 3.11 runtime
+# manager) for a near-zero-CVE footprint, pinned to the matching 3.14 runtime
 # digest. Only the venv and app code ship.
 FROM registry.access.redhat.com/hi/python:3.14.7@sha256:7a791d7b7716198e2bd161e683c401637771270a569bfa0bcb5758a12532e43a AS runtime
 WORKDIR /app

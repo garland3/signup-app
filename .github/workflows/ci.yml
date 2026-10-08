@@ -26,3 +26,26 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v
+
+  # The container image runs Python 3.14 (see Dockerfile). Test on that exact
+  # version too so the shipped runtime is covered by CI, not just the 3.11
+  # floor above. Keep this in step with the Dockerfile's base image tag.
+  test-image-python:
+    name: Test (Python 3.14)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.14.7
+
+      - name: Install dependencies
+        run: uv sync --extra dev --python 3.14.7
+
+      - name: Run tests
+        run: uv run --python 3.14.7 pytest tests/ -v
