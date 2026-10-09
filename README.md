@@ -86,6 +86,40 @@ Unauthenticated users hit `GET /api/auth/login` to start the flow; the callback
 lands on `GET /api/auth/callback`, which sets a signed session cookie. Log out
 with `GET /api/auth/logout`. See `.env.example` for Google/GitHub examples.
 
+#### Claims from the ID token (OpenID Connect)
+
+By default the user's email comes from the userinfo endpoint. With an OpenID
+Connect provider (Keycloak, Microsoft Entra ID, ...) the app can take its
+claims from the ID token instead, verified against the provider's signing keys:
+
+```
+OAUTH_CLAIMS_SOURCE=id_token
+OAUTH_ISSUER=https://keycloak.example.com/realms/myrealm
+# Optional: where to fetch the signing keys, if not the address discovery names
+# (e.g. an in-cluster URL); discovery is <OAUTH_ISSUER>/.well-known/openid-configuration
+OAUTH_JWKS_URL=
+```
+
+The app sends a `nonce` with the sign-in request and checks the ID token's
+signature (asymmetric algorithms only), issuer, audience (`OAUTH_CLIENT_ID`),
+expiry and nonce. `OAUTH_USERINFO_URL` isn't needed then. This is the way to use
+Entra ID, whose userinfo endpoint (Microsoft Graph) returns few claims and a
+`sub` that differs per application.
+
+#### The LiteLLM user ID
+
+Users are keyed in LiteLLM by their email (`user_id` = email). To key them by a
+stable identifier instead, name the claim:
+
+```
+OAUTH_USER_ID_FIELD=sub     # Keycloak; Entra ID: oid (with OAUTH_CLAIMS_SOURCE=id_token)
+```
+
+LiteLLM users are then created with that ID and the email as their
+`user_email`; key aliases still start with the email. Existing users and keys
+stay under their email IDs: switching a deployment that already has users moves
+them to new LiteLLM users.
+
 #### Running behind a TLS-terminating proxy (Kubernetes)
 
 By default the session cookie is marked `Secure` and only sent over HTTPS. If

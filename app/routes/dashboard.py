@@ -58,6 +58,7 @@ async def get_dashboard(
     no data to render.
     """
     user_email = request.state.user_email
+    user_id = request.state.user_id
     client = _get_client()
 
     today = datetime.now(timezone.utc).date()
@@ -66,14 +67,14 @@ async def get_dashboard(
 
     try:
         daily_activity = await client.get_user_daily_activity(
-            user_id=user_email, start_date=start_date, end_date=end_date
+            user_id=user_id, start_date=start_date, end_date=end_date
         )
     except Exception as e:
         raise _upstream_error("user_daily_activity", e)
 
     user_info = None
     try:
-        user_info = await client.get_user_info(user_id=user_email)
+        user_info = await client.get_user_info(user_id=user_id)
     except Exception as e:
         # Don't fail the whole dashboard for a missing user record:
         # newly-onboarded users may not have one yet.
@@ -81,7 +82,7 @@ async def get_dashboard(
 
     keys_list: list[dict] = []
     try:
-        result = await client.list_keys(user_id=user_email)
+        result = await client.list_keys(user_id=user_id)
         keys_list = result if isinstance(result, list) else result.get("keys", [])
     except Exception as e:
         logger.warning("list_keys failed for %s: %s", user_email, e)

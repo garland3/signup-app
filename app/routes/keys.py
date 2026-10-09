@@ -191,7 +191,7 @@ def _normalize_key_alias(name: str, user_email: str) -> str:
 
 
 async def _verify_key_ownership(
-    client: LiteLLMClient, token: str, user_email: str
+    client: LiteLLMClient, token: str, user_id: str
 ) -> dict:
     """Fetch key info and verify the authenticated user owns it.
 
@@ -207,7 +207,7 @@ async def _verify_key_ownership(
     info = key_info.get("info", key_info)
     key_owner = info.get("user_id", "")
 
-    if key_owner != user_email:
+    if key_owner != user_id:
         raise HTTPException(status_code=404, detail="Key not found")
 
     return info
@@ -232,10 +232,11 @@ async def create_key(body: CreateKeyRequest, request: Request):
     settings = get_settings()
     client = _get_client()
     user_email = request.state.user_email
+    user_id = request.state.user_id
 
     # Per-user hourly cap on key creation, on top of the per-minute API cap.
     if not limiter.check(
-        "key_create", user_email, settings.RATE_LIMIT_KEY_CREATE_PER_HOUR, 3600
+        "key_create", user_id, settings.RATE_LIMIT_KEY_CREATE_PER_HOUR, 3600
     ):
         audit("rate_limited", bucket="key_create", user=user_email)
         raise HTTPException(status_code=429, detail="Too many key creations")
@@ -268,7 +269,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # Enforce max active keys per user
     if settings.MAX_ACTIVE_KEYS_PER_USER is not None:
         try:
-            existing = await client.list_keys(user_id=user_email)
+            existing = await client.list_keys(user_id=user_id)
         except Exception as e:
             raise _upstream_error("list_keys", e)
         keys = existing if isinstance(existing, list) else existing.get("keys", [])
@@ -299,7 +300,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
                 detail="A team is required. Join a team before creating a key.",
             )
         try:
-            teams = await client.list_teams(user_id=user_email)
+            teams = await client.list_teams(user_id=user_id)
         except Exception as e:
             raise _upstream_error("list_teams", e)
         if body.team_id not in {t.get("team_id") for t in teams}:
@@ -310,7 +311,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     # Ensure the user exists in LiteLLM before creating a key
     try:
-        await client.ensure_user(user_email)
+        await client.ensure_user(user_id, email=user_email)
     except Exception as e:
         raise _upstream_error("ensure_user", e)
 
@@ -319,7 +320,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
         metadata["duration"] = body.duration
 
     kwargs = {
-        "user_id": user_email,
+        "user_id": user_id,
         "key_alias": key_name,
         "metadata": metadata,
     }
@@ -374,10 +375,10 @@ async def create_key(body: CreateKeyRequest, request: Request):
 @router.get("/keys")
 async def list_keys(request: Request):
     client = _get_client()
-    user_email = request.state.user_email
+    user_id = request.state.user_id
 
     try:
-        result = await client.list_keys(user_id=user_email)
+        result = await client.list_keys(user_id=user_id)
     except Exception as e:
         raise _upstream_error("list_keys", e)
 
@@ -401,13 +402,14 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
+    user_id = request.state.user_id
 
     # Validate purely-local fields before the upstream ownership check so
     # we don't pay an extra round-trip on bad input.
     if body.duration is not None:
         _validate_duration(body.duration)
 
-    info = await _verify_key_ownership(client, token, user_email)
+    info = await _verify_key_ownership(client, token, user_id)
 
     kwargs = {}
     if body.key_alias is not None:
@@ -464,8 +466,9 @@ async def delete_key(token: str, request: Request):
     _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
+    user_id = request.state.user_id
 
-    info = await _verify_key_ownership(client, token, user_email)
+    info = await _verify_key_ownership(client, token, user_id)
 
     existing_meta = info.get("metadata") or {}
     if not isinstance(existing_meta, dict):
@@ -488,8 +491,9 @@ async def block_key(token: str, request: Request):
     _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
+    user_id = request.state.user_id
 
-    await _verify_key_ownership(client, token, user_email)
+    await _verify_key_ownership(client, token, user_id)
 
     try:
         result = await client.block_key(key=token)
@@ -505,8 +509,9 @@ async def unblock_key(token: str, request: Request):
     _reject_raw_api_key(token)
     client = _get_client()
     user_email = request.state.user_email
+    user_id = request.state.user_id
 
-    await _verify_key_ownership(client, token, user_email)
+    await _verify_key_ownership(client, token, user_id)
 
     try:
         result = await client.unblock_key(key=token)
