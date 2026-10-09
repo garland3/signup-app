@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 from app.core.audit import audit
 from app.core.config import Settings, get_settings
 from app.core.oidc import IdTokenError, verify_id_token
+from app.core.team_claims import groups_from_claims
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ async def callback(request: Request):
             raise HTTPException(status_code=502, detail="Token exchange failed")
         tokens = token_resp.json()
         # The nonce must match (a sign-in without one in the session fails).
-        claims = await _claims(tokens, s, http, nonce or "")
+        claims = await claims_from_tokens(tokens, s, http, nonce or "")
 
     email = claims.get(s.OAUTH_EMAIL_FIELD)
     if not email or not isinstance(email, str):
@@ -152,6 +153,12 @@ async def callback(request: Request):
         request.session["user_id"] = user_id
 
     request.session["user_email"] = email
+    if s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims":
+        # Teams come from the identity provider: keep the groups, and the
+        # refresh token to re-read them before a key is made.
+        request.session["groups"] = groups_from_claims(claims, s)
+        if tokens.get("refresh_token"):
+            request.session["refresh_token"] = tokens["refresh_token"]
     audit("login_success", user=email, user_id=user_id)
     default_next = s.normalized_root_path + "/"
     next_url = request.session.pop("oauth_next", default_next) or default_next
@@ -164,7 +171,7 @@ def _source(s: Settings) -> str:
     return "the ID token" if s.OAUTH_CLAIMS_SOURCE == "id_token" else "userinfo"
 
 
-async def _claims(
+async def claims_from_tokens(
     tokens: dict, s: Settings, http: httpx.AsyncClient, nonce: str | None
 ) -> dict:
     """The user's claims from a token response: the verified ID token's, or

@@ -259,6 +259,12 @@ class LiteLLMClient:
         r.raise_for_status()
         return _extract_team_list(r.json())
 
+    async def list_all_teams(self) -> list[dict]:
+        """GET /team/list -> every team (needs an admin key)."""
+        r = await self._client().get("/team/list", headers=self._headers())
+        r.raise_for_status()
+        return _extract_team_list(r.json())
+
     async def list_available_teams(self, user_id: str) -> list[dict]:
         """GET /team/available?user_id=... -> teams the user may join.
 
