@@ -142,6 +142,51 @@ def _validate_duration(value: str) -> None:
         raise HTTPException(status_code=400, detail=_DURATION_HELP)
 
 
+# Seconds per unit, as (shortest, longest): a month is 28 to 31 days, so a
+# comparison across units must assume the worst case for each side.
+_UNIT_SECONDS = {
+    "s": (1, 1),
+    "m": (60, 60),
+    "h": (3600, 3600),
+    "d": (86400, 86400),
+    "mo": (28 * 86400, 31 * 86400),
+}
+
+
+def _within(duration: str, limit: str) -> bool:
+    """True if ``duration`` can never last longer than ``limit``.
+
+    Both are valid durations (``_DURATION_RE``). Same unit: compare counts.
+    Otherwise the longest ``duration`` can be must fit in the shortest
+    ``limit`` can be (so "31d" fits in "1mo" only if the month is 31 days,
+    which isn't guaranteed: it doesn't).
+    """
+    n, unit = _DURATION_RE.fullmatch(duration).groups()
+    limit_n, limit_unit = _DURATION_RE.fullmatch(limit).groups()
+    if unit == limit_unit:
+        return int(n) <= int(limit_n)
+    return int(n) * _UNIT_SECONDS[unit][1] <= int(limit_n) * _UNIT_SECONDS[limit_unit][0]
+
+
+def _capped_duration(duration: str | None) -> str | None:
+    """Apply MAX_KEY_DURATION to a user-supplied (already validated) duration.
+
+    No limit configured: unchanged. No duration given: the limit. Longer
+    than the limit: HTTP 400.
+    """
+    limit = get_settings().MAX_KEY_DURATION
+    if not limit:
+        return duration
+    if duration is None:
+        return limit
+    if not _within(duration, limit):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Keys may last at most {limit}. Choose a shorter duration.",
+        )
+    return duration
+
+
 def _sanitize_key_name(name: str) -> str:
     """Restrict a user-supplied key name to alphanumeric characters and dashes.
 
@@ -220,6 +265,7 @@ async def get_config():
         "app_name": s.APP_NAME,
         "required_metadata": s.required_metadata_fields,
         "max_active_keys": s.MAX_ACTIVE_KEYS_PER_USER,
+        "max_key_duration": s.MAX_KEY_DURATION or None,
         "nav_links": s.nav_links,
         "show_spend": s.SHOW_SPEND_COLUMN,
         "show_budget": s.SHOW_BUDGET_COLUMN,
@@ -254,6 +300,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     if body.duration:
         _validate_duration(body.duration)
+    # A key without a duration gets MAX_KEY_DURATION, if one is set.
+    duration = _capped_duration(body.duration or None)
 
     # Validate required metadata fields
     required = settings.required_metadata_fields
@@ -315,8 +363,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
         raise _upstream_error("ensure_user", e)
 
     # Persist duration in metadata so we can show it in the UI
-    if body.duration:
-        metadata["duration"] = body.duration
+    if duration:
+        metadata["duration"] = duration
 
     kwargs = {
         "user_id": user_email,
@@ -325,8 +373,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
     }
     if team_id:
         kwargs["team_id"] = team_id
-    if body.duration:
-        kwargs["duration"] = body.duration
+    if duration:
+        kwargs["duration"] = duration
     if body.models:
         kwargs["models"] = body.models
     if body.max_budget is not None:
@@ -366,7 +414,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
         key_alias=key_name,
         models=body.models or [],
         max_budget=body.max_budget,
-        duration=body.duration,
+        duration=duration,
     )
     return _format_key_response(result, include_full_key=full_key)
 
@@ -406,6 +454,7 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     # we don't pay an extra round-trip on bad input.
     if body.duration is not None:
         _validate_duration(body.duration)
+        _capped_duration(body.duration)
 
     info = await _verify_key_ownership(client, token, user_email)
 
