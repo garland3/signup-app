@@ -145,7 +145,8 @@ turning this on.
   restricted to proxy admins and team admins.
 - Teams must already exist in LiteLLM. This app never creates or deletes
   teams. **Always give each team an explicit models list**: LiteLLM treats a
-  team with no models list as allowed to use every model on the proxy.
+  team with no models list as unrestricted (all models). The verification
+  script confirms this for a model you name with `PROBE_MODEL`.
 
 ### User workflow
 
@@ -244,18 +245,30 @@ works, so list only teams meant for self-service enrollment.
 ### Verifying your LiteLLM
 
 `scripts/verify_litellm_teams_api.sh` checks, against your own proxy, every
-LiteLLM call the teams feature and the proposed SCIM bridge rely on. It
-creates a throwaway `probe-*` team, user, and keys and deletes them
-afterwards:
+LiteLLM call the teams feature and the proposed SCIM bridge rely on. It runs
+with the admin key, so point it at a staging proxy first. It creates
+throwaway resources named `probe-<random uuid>` (a user, teams, and keys)
+and deletes only the ones that run created, also when interrupted with
+Ctrl-C or terminated:
 
 ```bash
 LITELLM_BASE_URL=https://<litellm-host> LITELLM_ADMIN_KEY=<admin key> \
+  PROBE_MODEL=<a model configured on the proxy> \
   scripts/verify_litellm_teams_api.sh
 ```
 
-It also reports whether LiteLLM's built-in SCIM is licensed, whether removing
-a team member revokes their team keys, and how many models a team created
-without a models list can reach.
+It also reports whether LiteLLM's built-in SCIM is licensed and whether
+removing a team member revokes their team keys. With `PROBE_MODEL` set it
+makes up to five real inference calls (`max_tokens=1`) to that model to check
+inference authorization: a team listing the model is allowed, a team with
+`["no-default-models"]` is denied, and whether a team with no models list is
+allowed. Results apply to that model. Without `PROBE_MODEL` the model checks
+are skipped.
+
+Exit status: `0` all checks passed, `1` a check failed, `2` inconclusive
+(for example a network or upstream error), `3` cleanup failed, `130`/`143`
+interrupted. If cleanup fails, the script prints each leftover probe
+resource and the admin call that removes it.
 
 ### Rollout procedure
 

@@ -230,12 +230,15 @@ No change to the rule that every key requires team membership.
 
 - No SCIM or Enterprise settings needed; the bridge uses the admin API with
   the existing `LITELLM_ADMIN_KEY`.
-- **A team created without a models list can use every model on the
-  proxy** (verified). So the bridge must create teams with
-  `"models": ["no-default-models"]`, which LiteLLM rejects for every model
-  (verified: HTTP 403) until a LiteLLM admin sets the team's models and
-  budget. (Open question 4 covers whether the bridge should apply a default
-  template instead.)
+- **A team created without a models list is not restricted to a model
+  list.** In our test, a key in such a team was authorized for inference on
+  the proxy's configured model (HTTP 200); LiteLLM's documented behavior is
+  that an empty list means all models. So the bridge must create teams with
+  `"models": ["no-default-models"]`. In our test LiteLLM denied inference on
+  the configured model for a key in such a team (HTTP 403,
+  `team_model_access_denied`). A LiteLLM admin then sets the team's models
+  and budget. (Open question 4 covers whether the bridge should apply a
+  default template instead.)
 
 ### Entra ID
 
@@ -271,8 +274,8 @@ No change to the rule that every key requires team membership.
   change membership. Store it like the admin key, rotate it, and keep the
   SCIM path off any public route unless the provisioning service needs it.
 - **New teams must not default to all models.** LiteLLM treats an empty
-  models list as "all models", so the bridge always sets
-  `["no-default-models"]` on creation.
+  models list as "all models" (consistent with our inference test), so the
+  bridge always sets `["no-default-models"]` on creation.
 
 ## Open questions (to work through)
 
@@ -334,22 +337,33 @@ PostgreSQL 16 and **no license key**. Re-run against your own proxy with:
 
 ```bash
 LITELLM_BASE_URL=https://<litellm-host> LITELLM_ADMIN_KEY=<admin key> \
+  PROBE_MODEL=<a model configured on the proxy> \
   scripts/verify_litellm_teams_api.sh
 ```
 
-The script creates a throwaway `probe-*` team, user, and keys, checks each
-call below, and deletes them.
+The script creates throwaway resources named `probe-<random uuid>` (a user,
+teams, and keys), checks each call below, and deletes only what that run
+created, also on Ctrl-C or SIGTERM. Model-access rows are measured by real
+inference calls (chat completions with `max_tokens=1`) against
+`PROBE_MODEL`, after a baseline call proves that model works; listing
+endpoints such as `/v1/models` are not used as evidence. The results hold
+for the model tested, not for every model on a proxy. Without
+`PROBE_MODEL`, model-access checks are skipped and revocation is checked by
+authentication only. Exit status: 0 passed, 1 a check failed, 2
+inconclusive (network or upstream error), 3 cleanup failed (residual probe
+resources are listed with the call that removes each), 130/143
+interrupted.
 
 | Check | Result |
 |---|---|
 | Built-in `/scim/v2` (Users, Groups, ServiceProviderConfig), with the master key | **HTTP 403**: "only available for LiteLLM Enterprise users ... set `LITELLM_LICENSE`" |
-| `POST /team/new` with `models: ["no-default-models"]` | Works; keys in that team get **HTTP 403** for every model |
-| `POST /team/new` with no `models` | Works, but the team can use **every model** |
+| `POST /team/new` with `models: ["no-default-models"]` | Works; inference on the configured model with a key in that team gets **HTTP 403** (`team_model_access_denied`) |
+| `POST /team/new` with no `models` | Works, but inference on the configured model with a key in that team is **allowed** (HTTP 200): the team is not restricted to a list |
 | `POST /user/new` | Works |
 | `POST /team/member_add` with `member.user_id` | Works |
 | `GET /team/list?user_id=` (admin key) | Returns that user's teams |
 | `POST /team/update` (rename) | Works |
-| `POST /key/generate` with `team_id` | Works; key authenticates |
-| `POST /team/member_delete` | Works, **and deletes the member's keys for that team** (key gets HTTP 401) |
+| `POST /key/generate` with `team_id` | Works; key authenticates and, in a team that lists the model, is authorized for inference (HTTP 200) |
+| `POST /team/member_delete` | Works, **and deletes the member's keys for that team**: the same key's next inference call gets HTTP 401 |
 | `GET /team/available?user_id=` (admin key) | **Ignores `user_id`**: answers for the admin key's owner (returns `[]`). Called with a key owned by the user, it returns the teams listed in `litellm_settings.default_internal_user_params.available_teams` |
 | This app's teams feature end to end (`/api/me`, team-scoped key creation, non-member team rejected) | Works, except self-join (previous row) |
