@@ -197,6 +197,16 @@ turning this on.
 > any teams are offered for self-join) leaves those users unable to create
 > API keys. Follow the rollout procedure below.
 
+Deployments whose teams stand for something with its own name (projects, cost
+centers) can set `TEAM_LABEL=Project`: the UI and messages then say project
+instead of team. `TEAM_LABEL_PLURAL` gives a plural that isn't the label plus
+"s" (`Classes`). Within sentences the label is lower case, unless it has
+capitals past its first letter (`SIG`). The API keeps `team_id` and
+`/api/teams`. The Usage page's "Project / task breakdown" groups keys by their
+`project` metadata. If that metadata means something other than the teams,
+`TEAM_LABEL=Project` gives "project" two meanings; choose a different label
+there.
+
 ### Requirements
 
 - A LiteLLM proxy exposing `GET /team/list`, `GET /team/available`,

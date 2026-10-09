@@ -39,10 +39,35 @@ async function loadConfig() {
     document.getElementById("app-title").textContent = title;
     document.title = title;
     renderNavLinks();
+    renderTeamLabels();
     renderMetadataInputs();
     renderSpendHeader();
     renderBudgetHeader();
     renderMetadataHeaders();
+}
+
+// TEAM_LABEL: the deployment's word for a team ("Project", say), as written
+// and its plural, both from /api/config.
+function teamTerm(plural) {
+    return plural
+        ? (appConfig.team_label_plural || "Teams")
+        : (appConfig.team_label || "Team");
+}
+
+// The label within a sentence: lower case if only its first letter is a
+// capital ("projects"); otherwise as written ("SIGs"), as on the server.
+function teamWord(plural) {
+    var w = teamTerm(plural);
+    return w.slice(1) === w.slice(1).toLowerCase() ? w.toLowerCase() : w;
+}
+
+// Elements with data-team-text: their text with each {Team} / {team} replaced.
+function renderTeamLabels() {
+    document.querySelectorAll("[data-team-text]").forEach(function(el) {
+        el.textContent = el.getAttribute("data-team-text")
+            .split("{Team}").join(teamTerm(false))
+            .split("{team}").join(teamWord(false));
+    });
 }
 
 function renderSpendHeader() {
@@ -245,20 +270,20 @@ async function loadUser() {
 function teamRequirementError() {
     if (!teamsEnabled) return null;
     if (teamsUnavailable) {
-        return "Couldn't load your teams right now, so keys can't be created. Try again later.";
+        return "Couldn't load your " + teamWord(true) + " right now, so keys can't be created. Try again later.";
     }
     if (userTeams.length === 0) {
         return teamSource === "claims"
-            ? "You aren't in any team. Teams come from your sign-in: ask your administrators to add you to one."
-            : "Join a team before creating a key.";
+            ? "You aren't in any " + teamWord(false) + ". Your " + teamWord(true) + " come from your sign-in: ask your administrators to add you to one."
+            : "Keys belong to " + teamWord(true) + ": join one before creating a key.";
     }
     return null;
 }
 
 // Populate the create-key team selector from the user's teams. The row is
-// only shown when the user belongs to more than one team; with exactly one
-// team the key is scoped to it implicitly (no choice to make), and with none
-// the row stays hidden.
+// shown whenever the user belongs to a team, so they can see where the key
+// goes: with exactly one team it is shown but disabled (the key is scoped to
+// it implicitly, no choice to make), and with none the row stays hidden.
 function renderTeamSelect() {
     var row = document.getElementById("key-team-row");
     var select = document.getElementById("key-team");
@@ -270,7 +295,8 @@ function renderTeamSelect() {
         opt.textContent = t.team_alias || t.team_id;
         select.appendChild(opt);
     });
-    if (userTeams.length > 1) {
+    select.disabled = userTeams.length === 1;
+    if (userTeams.length > 0) {
         row.classList.remove("hidden");
     } else {
         row.classList.add("hidden");
@@ -647,11 +673,11 @@ async function joinTeam() {
     }
     if (!r.ok) {
         var err = await r.json().catch(function() { return {}; });
-        showJoinError("Failed to join team: " + (err.detail || r.statusText));
+        showJoinError("Failed to join " + teamWord(false) + ": " + (err.detail || r.statusText));
         return;
     }
     hideJoinModal();
-    showToast("Joined team", "success");
+    showToast("Joined " + teamWord(false), "success");
     // Refresh membership (feeds the create-key dropdown) and the join list.
     await loadUser();
     await loadAvailableTeams();

@@ -69,10 +69,12 @@ def reset_cache() -> None:
     _inflight.clear()
 
 
-OVERAGE_DETAIL = (
-    "Your sign-in doesn't list your groups (there are too many), so your teams can't be "
-    "checked. Ask your administrators to send only the groups this app uses."
-)
+def overage_detail(settings: Settings) -> str:
+    return (
+        f"Your sign-in doesn't list your groups (there are too many), so your "
+        f"{settings.team_word(True)} can't be checked. Ask your administrators to send only "
+        "the groups this app uses."
+    )
 
 
 def groups_overage(claims: dict, settings: Settings) -> bool:
@@ -183,10 +185,10 @@ async def refresh_groups(request: Request) -> list[str]:
         if age <= max(SIGN_IN_GRACE_SECONDS, s.TEAM_CLAIMS_MAX_AGE_SECONDS):
             if session.get("groups_overage"):
                 audit("team_claims_overage", user=session.get("user_email"))
-                raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
+                raise HTTPException(status_code=403, detail=overage_detail(s))
             return session_groups(request)
         audit("team_claims_stale", user=session.get("user_email"), age=int(age))
-        raise HTTPException(status_code=401, detail="Sign in again to confirm your teams")
+        raise HTTPException(status_code=401, detail=f"Sign in again to confirm your {s.team_word(True)}")
     try:
         tokens, claims = await _refresh_shared(refresh_token, s, session)
     except RefreshRefused:
@@ -213,7 +215,7 @@ async def refresh_groups(request: Request) -> list[str]:
     groups = store_groups(session, claims, s)  # the rotated token: written by the task
     if session["groups_overage"]:
         audit("team_claims_overage", user=session.get("user_email"))
-        raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
+        raise HTTPException(status_code=403, detail=overage_detail(s))
     return groups
 
 
@@ -284,7 +286,7 @@ async def _refresh(refresh_token: str, s: Settings) -> tuple[dict, dict]:
             )
         except httpx.RequestError:
             logger.exception("Token refresh transport error")
-            raise HTTPException(status_code=502, detail="Could not check your teams; try again")
+            raise HTTPException(status_code=502, detail=f"Could not check your {s.team_word(True)}; try again")
         try:
             body = r.json()
         except ValueError:
@@ -303,7 +305,7 @@ async def _refresh(refresh_token: str, s: Settings) -> tuple[dict, dict]:
                 detail = f"not a JSON object: {r.headers.get('content-type')!r}, {len(r.content)} bytes"
             logger.error("Token refresh failed (%s, %s): %s", r.status_code, error, detail)
             audit("oauth_refresh_error", status=r.status_code, error=error)
-            raise HTTPException(status_code=502, detail="Could not check your teams; try again")
+            raise HTTPException(status_code=502, detail=f"Could not check your {s.team_word(True)}; try again")
         tokens = body
         if s.OAUTH_CLAIMS_SOURCE == "id_token" and not tokens.get("id_token"):
             logger.error("Token refresh returned no ID token (OAUTH_CLAIMS_SOURCE=id_token)")

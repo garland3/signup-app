@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # seconds, or 60 (team_claims.SIGN_IN_GRACE_SECONDS), whichever is longer;
     # older ones need a new sign-in.
     TEAM_CLAIMS_MAX_AGE_SECONDS: int = 0
+    # What the UI and messages call a team, for deployments with their own word
+    # for it (e.g. "Project"), and its plural if adding an "s" isn't it (e.g.
+    # "Classes"). API field names stay team_*.
+    TEAM_LABEL: str = "Team"
+    TEAM_LABEL_PLURAL: str = ""
     # Optional URL path prefix the app is served under (e.g. "/start").
     # When set, all routes, static assets, and auth redirects are served
     # beneath this prefix. Leave blank to serve from the site root.
@@ -186,6 +191,20 @@ class Settings(BaseSettings):
             if name and url:
                 links.append({"name": name, "url": url})
         return links
+
+    def team_label(self, plural: bool = False) -> str:
+        """TEAM_LABEL as written ("Project"), or its plural: TEAM_LABEL_PLURAL, else
+        the label with an "s". A blank label is "Team"."""
+        label = self.TEAM_LABEL.strip() or "Team"
+        if not plural:
+            return label
+        return self.TEAM_LABEL_PLURAL.strip() or label + "s"
+
+    def team_word(self, plural: bool = False) -> str:
+        """The label within a sentence: lower case if only its first letter is a
+        capital ("projects"); otherwise as written ("SIGs", "Cost Center")."""
+        word = self.team_label(plural)
+        return word.lower() if word[1:] == word[1:].lower() else word
 
     @property
     def oauth_scope_list(self) -> list[str]:

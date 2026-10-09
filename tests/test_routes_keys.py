@@ -1094,7 +1094,7 @@ async def test_create_key_without_team_rejected_when_teams_enabled():
         r = await c.post("/api/keys", json={"name": "k"}, headers=AUTH)
 
     assert r.status_code == 400
-    assert "team is required" in r.json()["detail"].lower()
+    assert r.json()["detail"] == "Keys belong to teams: join one before creating a key."
 
 
 @pytest.mark.asyncio

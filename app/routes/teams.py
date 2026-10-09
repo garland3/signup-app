@@ -89,7 +89,7 @@ async def join_team(body: JoinTeamRequest, request: Request):
         raise _upstream_error("list_teams", e)
     if team_id in {t.get("team_id") for t in joined}:
         raise HTTPException(
-            status_code=409, detail="You are already a member of this team."
+            status_code=409, detail=f"You are already a member of this {get_settings().team_word()}."
         )
 
     try:
@@ -98,7 +98,7 @@ async def join_team(body: JoinTeamRequest, request: Request):
         raise _upstream_error("list_available_teams", e)
     if team_id not in {t.get("team_id") for t in available}:
         # The caller is not entitled to join this team.
-        raise HTTPException(status_code=403, detail="Team not available to join")
+        raise HTTPException(status_code=403, detail=f"{get_settings().team_label()} not available to join")
 
     # Ensure the user exists in LiteLLM ("add or create") before adding them.
     try:
@@ -114,7 +114,7 @@ async def join_team(body: JoinTeamRequest, request: Request):
         if status == 400 and "already" in text:
             raise HTTPException(
                 status_code=409,
-                detail="You are already a member of this team.",
+                detail=f"You are already a member of this {get_settings().team_word()}.",
             )
         raise _upstream_error("team_member_add", e)
     except Exception as e:
