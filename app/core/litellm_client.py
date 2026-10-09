@@ -133,11 +133,30 @@ class LiteLLMClient:
         r.raise_for_status()
         return r.json()
 
-    async def ensure_user(self, user_id: str) -> dict:
-        """Get or create a LiteLLM user."""
+    async def ensure_user(self, user_id: str, email: str | None = None) -> dict:
+        """Get or create a LiteLLM user.
+
+        When the user ID isn't the email (OAUTH_USER_ID_FIELD), a new user also
+        gets the email as its user_email; otherwise the user is created with
+        user_id = email and no user_email, as before.
+        """
         existing = await self.get_user(user_id)
         if existing is not None:
             return existing
+        if email and email != user_id:
+            try:
+                return await self.create_user(user_id, user_email=email)
+            except httpx.HTTPStatusError as e:
+                # LiteLLM keeps emails unique. Another user with this email (the
+                # account was deleted and recreated, so its ID changed, or it was
+                # keyed by email before): a new identity gets a new user, just
+                # without the email.
+                if "already exists" not in e.response.text:
+                    raise
+                logger.warning(
+                    "LiteLLM user with email %s exists under another ID; creating %s without email",
+                    email, user_id,
+                )
         return await self.create_user(user_id)
 
     async def generate_key(

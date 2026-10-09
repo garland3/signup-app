@@ -7,7 +7,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from app.core.audit import audit
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
+from app.core.oidc import IdTokenError, verify_id_token
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,14 @@ def _require_oauth_configured():
             ("OAUTH_CLIENT_SECRET", s.OAUTH_CLIENT_SECRET),
             ("OAUTH_AUTHORIZE_URL", s.OAUTH_AUTHORIZE_URL),
             ("OAUTH_TOKEN_URL", s.OAUTH_TOKEN_URL),
-            ("OAUTH_USERINFO_URL", s.OAUTH_USERINFO_URL),
             ("OAUTH_REDIRECT_URL", s.OAUTH_REDIRECT_URL),
             ("SESSION_SECRET", s.SESSION_SECRET),
         ]
+        + (
+            [("OAUTH_ISSUER", s.OAUTH_ISSUER)]
+            if s.OAUTH_CLAIMS_SOURCE == "id_token"
+            else [("OAUTH_USERINFO_URL", s.OAUTH_USERINFO_URL)]
+        )
         if not val
     ]
     if missing:
@@ -69,6 +74,11 @@ async def login(request: Request):
         "scope": s.OAUTH_SCOPES,
         "state": state,
     }
+    if s.OAUTH_CLAIMS_SOURCE == "id_token":
+        # Binds the ID token to this sign-in (checked in the callback).
+        nonce = secrets.token_urlsafe(32)
+        request.session["oauth_nonce"] = nonce
+        params["nonce"] = nonce
     return RedirectResponse(
         f"{s.OAUTH_AUTHORIZE_URL}?{urlencode(params)}", status_code=302
     )
@@ -96,6 +106,7 @@ async def callback(request: Request):
     if not expected_state or not secrets.compare_digest(state, expected_state):
         audit("oauth_state_mismatch")
         raise HTTPException(status_code=400, detail="Invalid state")
+    nonce = request.session.pop("oauth_nonce", None)
 
     # Exchange code for access token
     async with httpx.AsyncClient(timeout=10.0) as http:
@@ -120,43 +131,74 @@ async def callback(request: Request):
             audit("oauth_token_exchange_error", status=token_resp.status_code)
             raise HTTPException(status_code=502, detail="Token exchange failed")
         tokens = token_resp.json()
-        access_token = tokens.get("access_token")
-        if not access_token:
-            audit("oauth_token_exchange_error", reason="no_access_token")
-            raise HTTPException(
-                status_code=502, detail="No access_token in token response"
-            )
+        # The nonce must match (a sign-in without one in the session fails).
+        claims = await _claims(tokens, s, http, nonce or "")
 
-        # Fetch userinfo
-        try:
-            ui_resp = await http.get(
-                s.OAUTH_USERINFO_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-        except httpx.RequestError:
-            logger.exception("Userinfo fetch transport error")
-            audit("oauth_userinfo_error", reason="transport")
-            raise HTTPException(status_code=502, detail="Userinfo fetch failed")
-        if ui_resp.status_code >= 400:
-            logger.error("Userinfo fetch failed: %s", ui_resp.text)
-            audit("oauth_userinfo_error", status=ui_resp.status_code)
-            raise HTTPException(status_code=502, detail="Userinfo fetch failed")
-        userinfo = ui_resp.json()
-
-    email = userinfo.get(s.OAUTH_EMAIL_FIELD)
-    if not email:
+    email = claims.get(s.OAUTH_EMAIL_FIELD)
+    if not email or not isinstance(email, str):
         raise HTTPException(
             status_code=400,
-            detail=f"Email not found in userinfo (field: {s.OAUTH_EMAIL_FIELD})",
+            detail=f"Email not found in {_source(s)} (field: {s.OAUTH_EMAIL_FIELD})",
         )
+    # The LiteLLM user ID: a stable claim such as sub or oid, or the email.
+    user_id = email
+    if s.OAUTH_USER_ID_FIELD:
+        user_id = claims.get(s.OAUTH_USER_ID_FIELD)
+        if not user_id or not isinstance(user_id, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"User ID not found in {_source(s)} (field: {s.OAUTH_USER_ID_FIELD})",
+            )
+        request.session["user_id"] = user_id
 
     request.session["user_email"] = email
-    audit("login_success", user=email)
+    audit("login_success", user=email, user_id=user_id)
     default_next = s.normalized_root_path + "/"
     next_url = request.session.pop("oauth_next", default_next) or default_next
     if not _is_safe_redirect(next_url):
         next_url = default_next
     return RedirectResponse(next_url, status_code=302)
+
+
+def _source(s: Settings) -> str:
+    return "the ID token" if s.OAUTH_CLAIMS_SOURCE == "id_token" else "userinfo"
+
+
+async def _claims(
+    tokens: dict, s: Settings, http: httpx.AsyncClient, nonce: str | None
+) -> dict:
+    """The user's claims from a token response: the verified ID token's, or
+    the userinfo endpoint's (called with the access token)."""
+    if s.OAUTH_CLAIMS_SOURCE == "id_token":
+        try:
+            return await verify_id_token(
+                tokens.get("id_token"), settings=s, http=http, nonce=nonce
+            )
+        except IdTokenError as e:
+            logger.error("ID token verification failed: %s", e)
+            audit("oauth_id_token_error", reason=str(e))
+            raise HTTPException(status_code=502, detail="Sign-in could not be verified")
+
+    access_token = tokens.get("access_token")
+    if not access_token:
+        audit("oauth_token_exchange_error", reason="no_access_token")
+        raise HTTPException(
+            status_code=502, detail="No access_token in token response"
+        )
+    try:
+        ui_resp = await http.get(
+            s.OAUTH_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    except httpx.RequestError:
+        logger.exception("Userinfo fetch transport error")
+        audit("oauth_userinfo_error", reason="transport")
+        raise HTTPException(status_code=502, detail="Userinfo fetch failed")
+    if ui_resp.status_code >= 400:
+        logger.error("Userinfo fetch failed: %s", ui_resp.text)
+        audit("oauth_userinfo_error", status=ui_resp.status_code)
+        raise HTTPException(status_code=502, detail="Userinfo fetch failed")
+    return ui_resp.json()
 
 
 @router.post("/logout")
