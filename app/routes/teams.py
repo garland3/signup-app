@@ -28,8 +28,10 @@ def _upstream_error(op: str, exc: Exception) -> HTTPException:
 
 
 def _require_teams_enabled() -> None:
-    if not get_settings().FEATURE_TEAMS_ENABLED:
-        # 404 (not 403) so the feature is invisible when disabled.
+    s = get_settings()
+    # 404 (not 403) so the feature is invisible when disabled. With teams from
+    # the identity provider (TEAM_SOURCE=claims) there is no self-join.
+    if not s.FEATURE_TEAMS_ENABLED or s.TEAM_SOURCE == "claims":
         raise HTTPException(status_code=404, detail="Not found")
 
 

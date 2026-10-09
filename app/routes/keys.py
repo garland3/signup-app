@@ -1,6 +1,8 @@
 import logging
 import re
 
+import httpx
+
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
@@ -8,6 +10,7 @@ from app.core.audit import audit
 from app.core.config import get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
 from app.core.rate_limit import limiter
+from app.core.team_claims import refresh_groups, teams_for_groups
 
 logger = logging.getLogger(__name__)
 
@@ -293,14 +296,25 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # or a failed membership lookup all block creation. Validate before
     # provisioning anything so a rejected request never creates a user.
     team_id = None
+    from_claims = settings.TEAM_SOURCE == "claims"
     if settings.FEATURE_TEAMS_ENABLED:
         if not body.team_id:
             raise HTTPException(
                 status_code=400,
-                detail="A team is required. Join a team before creating a key.",
+                detail=(
+                    "A team is required. Your teams come from your sign-in; ask your administrators if you have none."
+                    if from_claims
+                    else "A team is required. Join a team before creating a key."
+                ),
             )
+        if from_claims:
+            # The identity provider's current groups, not the session's.
+            groups = await refresh_groups(request)
         try:
-            teams = await client.list_teams(user_id=user_id)
+            if from_claims:
+                teams = await teams_for_groups(groups, client)
+            else:
+                teams = await client.list_teams(user_id=user_id)
         except Exception as e:
             raise _upstream_error("list_teams", e)
         if body.team_id not in {t.get("team_id") for t in teams}:
@@ -314,6 +328,19 @@ async def create_key(body: CreateKeyRequest, request: Request):
         await client.ensure_user(user_id, email=user_email)
     except Exception as e:
         raise _upstream_error("ensure_user", e)
+
+    # Teams from claims: the person is in the team by the identity provider's
+    # say; make them a LiteLLM member too, so the team's per-member limits
+    # apply to their keys.
+    if team_id and from_claims:
+        try:
+            await client.add_team_member(team_id, user_id, role="user")
+        except httpx.HTTPStatusError as e:
+            text = (e.response.text if e.response is not None else "").lower()
+            if not (e.response is not None and e.response.status_code == 400 and "already" in text):
+                raise _upstream_error("team_member_add", e)
+        except Exception as e:
+            raise _upstream_error("team_member_add", e)
 
     # Persist duration in metadata so we can show it in the UI
     if body.duration:
