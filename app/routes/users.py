@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 
 from app.core.config import get_settings
 from app.core.litellm_client import LiteLLMClient
+from app.core.team_claims import session_groups, teams_for_groups
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ async def me(request: Request):
     payload = {
         "email": request.state.user_email,
         "auth_mode": s.AUTH_MODE,
+        "team_source": s.TEAM_SOURCE,
     }
     if s.FEATURE_TEAMS_ENABLED:
         # The teams the user belongs to, for the team-scoped key selector.
@@ -24,10 +26,23 @@ async def me(request: Request):
         # unknown (not empty), so it can show an error rather than treat the
         # user as having no teams. Key creation re-checks membership itself
         # and fails closed.
-        teams, ok = await _load_user_teams(request.state.user_id)
+        if s.TEAM_SOURCE == "claims":
+            teams, ok = await _claim_teams(request)
+        else:
+            teams, ok = await _load_user_teams(request.state.user_id)
         payload["teams"] = teams
         payload["teams_unavailable"] = not ok
     return payload
+
+
+async def _claim_teams(request: Request) -> tuple[list[dict], bool]:
+    """Teams from the sign-in's groups (re-checked when a key is made)."""
+    try:
+        teams = await teams_for_groups(session_groups(request), LiteLLMClient(get_settings()))
+    except Exception as e:
+        logger.warning("Could not load teams for %s: %s", request.state.user_id, e)
+        return [], False
+    return teams, True
 
 
 async def _load_user_teams(user_id: str) -> tuple[list[dict], bool]:

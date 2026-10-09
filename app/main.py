@@ -75,6 +75,13 @@ def _enforce_startup_safety(settings) -> None:
     ):
         problems.append("OAUTH_CLAIMS_SOURCE=id_token requires OAUTH_ISSUER")
 
+    if settings.TEAM_SOURCE == "claims" and (
+        settings.AUTH_MODE != "oauth" or not settings.FEATURE_TEAMS_ENABLED
+    ):
+        problems.append(
+            "TEAM_SOURCE=claims requires AUTH_MODE=oauth and FEATURE_TEAMS_ENABLED=true"
+        )
+
     if settings.AUTH_MODE == "oauth" and not settings.SESSION_SECRET:
         problems.append("SESSION_SECRET must be set when AUTH_MODE=oauth")
 

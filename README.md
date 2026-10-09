@@ -264,6 +264,41 @@ catch an overbroad configuration.
 3. Verify `/team/available` as shown above, for at least one ordinary user.
 4. Set `FEATURE_TEAMS_ENABLED=true` and restart the app.
 
+### Teams from the identity provider (`TEAM_SOURCE=claims`)
+
+Instead of LiteLLM memberships and self-join, team membership can come from the
+identity provider, so it is governed there (group administration, Entra ID
+access packages, reviews) and the app only ever reads it:
+
+```
+AUTH_MODE=oauth
+FEATURE_TEAMS_ENABLED=true
+TEAM_SOURCE=claims
+GROUPS_FIELD=groups          # the claim holding the groups; Entra ID app roles: roles
+TEAM_GROUP_PREFIX=project-   # only these groups are teams
+```
+
+- **A person's teams** are the groups in their sign-in claims that start with
+  `TEAM_GROUP_PREFIX` and name a LiteLLM team, by `team_alias` or `team_id`
+  (group `project-alpha` -> the team aliased `project-alpha`). Operators create
+  the teams; groups without a team are ignored.
+- **No self-join:** `/api/teams/available` and `/api/teams/join` answer 404 and
+  the Join button stays hidden. `GET /api/me` reports `team_source: "claims"`.
+- **Before a key is made** the app refreshes the person's tokens (refresh-token
+  grant) and re-reads their groups, so someone taken out of a group can't make
+  keys in it from an old session. If the provider refuses the refresh (the
+  sign-in session ended, the person was disabled), the app's session ends and
+  the person signs in again. Without a refresh token (Entra ID issues one only
+  with the `offline_access` scope), the groups from sign-in are used.
+- **LiteLLM membership follows:** the app adds the person to the team
+  (`/team/member_add`, role `user`) before making the key, so the team's
+  per-member budget applies. It never removes members: when someone leaves a
+  group, removing them from the team, and their keys in it, is the job of
+  whatever manages the identity provider's side (a reconciler).
+- Use it with `OAUTH_CLAIMS_SOURCE=id_token` for groups in the ID token (Keycloak:
+  a group membership mapper on the client; Entra ID: app roles), or with
+  userinfo if the provider puts the groups there.
+
 ## API Endpoints
 
 | Method | Path | Auth | Description |

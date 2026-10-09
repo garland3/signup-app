@@ -12,6 +12,19 @@ class Settings(BaseSettings):
     # unaffected; when False the /api/teams routes 404, /api/me omits teams,
     # and the create-key team selector never appears.
     FEATURE_TEAMS_ENABLED: bool = False
+    # Where team membership comes from (with FEATURE_TEAMS_ENABLED):
+    #   "litellm": LiteLLM's own memberships; people join the teams LiteLLM
+    #              lists as available themselves (self-service join)
+    #   "claims":  the identity provider: a person's teams are the groups (or
+    #              roles) in their sign-in claims that start with
+    #              TEAM_GROUP_PREFIX and name a LiteLLM team (its team_alias or
+    #              team_id). No self-join; membership is managed in the
+    #              identity provider. Needs AUTH_MODE=oauth.
+    TEAM_SOURCE: Literal["litellm", "claims"] = "litellm"
+    # TEAM_SOURCE=claims: the claim holding the groups (Keycloak: groups;
+    # Entra ID: roles, the app roles) and the prefix of those that are teams.
+    GROUPS_FIELD: str = "groups"
+    TEAM_GROUP_PREFIX: str = "project-"
     # Optional URL path prefix the app is served under (e.g. "/start").
     # When set, all routes, static assets, and auth redirects are served
     # beneath this prefix. Leave blank to serve from the site root.
