@@ -162,7 +162,8 @@ deletes all of their team keys. Because the bridge handles removal itself,
 keys stop working on the same cycle as the membership change. If a LiteLLM
 version ever stops deleting keys on member removal, the bridge falls back to
 `/key/block` on the user's keys for that team;
-`scripts/verify_litellm_teams_api.sh` reports which behavior a proxy has. A
+`scripts/verify_litellm_teams_api.sh` reports which behavior a proxy has and
+checks that `/key/block` rejects a key. A
 periodic **reconciliation run** catches anything missed, such as a membership
 changed by hand in LiteLLM.
 
@@ -351,8 +352,8 @@ for the model tested, not for every model on a proxy. Without
 `PROBE_MODEL`, model-access checks are skipped and revocation is checked by
 authentication only. Exit status: 0 passed, 1 a check failed, 2
 inconclusive (network or upstream error), 3 cleanup failed (residual probe
-resources are listed with the call that removes each), 130/143
-interrupted.
+resources are listed with the call that removes each; takes precedence over
+1 and 2), 130/143 interrupted.
 
 | Check | Result |
 |---|---|
@@ -365,5 +366,6 @@ interrupted.
 | `POST /team/update` (rename) | Works |
 | `POST /key/generate` with `team_id` | Works; key authenticates and, in a team that lists the model, is authorized for inference (HTTP 200) |
 | `POST /team/member_delete` | Works, **and deletes the member's keys for that team**: the same key's next inference call gets HTTP 401 |
+| `POST /key/block` (the bridge's fallback) | Works: the blocked key's next inference call gets HTTP 401 |
 | `GET /team/available?user_id=` (admin key) | **Ignores `user_id`**: answers for the admin key's owner (returns `[]`). Called with a key owned by the user, it returns the teams listed in `litellm_settings.default_internal_user_params.available_teams` |
 | This app's teams feature end to end (`/api/me`, team-scoped key creation, non-member team rejected) | Works, except self-join (previous row) |

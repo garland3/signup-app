@@ -257,17 +257,19 @@ LITELLM_BASE_URL=https://<litellm-host> LITELLM_ADMIN_KEY=<admin key> \
   scripts/verify_litellm_teams_api.sh
 ```
 
-It also reports whether LiteLLM's built-in SCIM is licensed and whether
-removing a team member revokes their team keys. With `PROBE_MODEL` set it
-makes up to five real inference calls (`max_tokens=1`) to that model to check
-inference authorization: a team listing the model is allowed, a team with
+It also reports whether LiteLLM's built-in SCIM is licensed, checks that
+`POST /key/block` actually rejects a key, and reports whether removing a team
+member revokes their team keys (if it doesn't, it checks that blocking that
+key works instead). With `PROBE_MODEL` set it makes up to eight real
+inference calls (`max_tokens=1`) to that model to check inference
+authorization: a team listing the model is allowed, a team with
 `["no-default-models"]` is denied, and whether a team with no models list is
 allowed. Results apply to that model. Without `PROBE_MODEL` the model checks
-are skipped.
+are skipped and key revocation is checked by authentication only.
 
 Exit status: `0` all checks passed, `1` a check failed, `2` inconclusive
-(for example a network or upstream error), `3` cleanup failed, `130`/`143`
-interrupted. If cleanup fails, the script prints each leftover probe
+(for example a network or upstream error), `3` cleanup failed (takes
+precedence over `1` and `2`), `130`/`143` interrupted. If cleanup fails, the script prints each leftover probe
 resource and the admin call that removes it.
 
 ### Rollout procedure
