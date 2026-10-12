@@ -1,4 +1,5 @@
 var currentKeys = [];
+var keysLoaded = false;
 // Teams the current user belongs to (populated from /api/me when the teams
 // feature is enabled). Drives the team selector in the create-key modal.
 var userTeams = [];
@@ -48,6 +49,30 @@ function renderSpendHeader() {
     } else {
         th.classList.add("hidden");
     }
+}
+
+// The team column is shown whenever teams are enabled (every key has one).
+function renderTeamHeader() {
+    var th = document.getElementById("team-col-header");
+    if (!th) return;
+    if (teamsEnabled) {
+        th.classList.remove("hidden");
+    } else {
+        th.classList.add("hidden");
+    }
+}
+
+// A key's team, by name: the name the user's own teams give it, else the
+// key's team_alias, else its team_id (a team the user has since left, or
+// one LiteLLM returned without an alias). "-" for a key in no team.
+function teamLabel(k) {
+    if (!k.team_id) return "-";
+    for (var i = 0; i < userTeams.length; i++) {
+        if (userTeams[i].team_id === k.team_id) {
+            return userTeams[i].team_alias || k.team_id;
+        }
+    }
+    return k.team_alias || k.team_id;
 }
 
 function renderBudgetHeader() {
@@ -171,6 +196,9 @@ async function loadUser() {
         teamsUnavailable = !!data.teams_unavailable;
         userTeams = data.teams || [];
         renderTeamSelect();
+        // The keys may have loaded first: show their team column and names.
+        renderTeamHeader();
+        if (keysLoaded) renderKeys();
     }
 }
 
@@ -211,6 +239,7 @@ async function loadKeys() {
     var r = await fetch(API_BASE + "/keys");
     if (!r.ok) return;
     currentKeys = await r.json();
+    keysLoaded = true;
     renderKeys();
 }
 
@@ -236,6 +265,7 @@ function renderKeys() {
     currentKeys.forEach(function(k) {
         var tr = document.createElement("tr");
         appendCell(tr, k.name);
+        if (teamsEnabled) appendCell(tr, teamLabel(k));
 
         var prefixCell = document.createElement("td");
         var prefixSpan = document.createElement("span");
