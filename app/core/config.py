@@ -53,8 +53,24 @@ class Settings(BaseSettings):
     # Full callback URL registered with the provider, e.g.
     # https://app.example.com/api/auth/callback
     OAUTH_REDIRECT_URL: str = ""
-    # Field in the userinfo response that holds the user's email
+    # Field in the userinfo response (or ID token claim) that holds the user's email
     OAUTH_EMAIL_FIELD: str = "email"
+    # Where the user's claims come from:
+    #   "userinfo": the provider's userinfo endpoint (OAUTH_USERINFO_URL)
+    #   "id_token": the OpenID Connect ID token from the token response,
+    #               verified against the provider's signing keys (OAUTH_ISSUER)
+    OAUTH_CLAIMS_SOURCE: Literal["userinfo", "id_token"] = "userinfo"
+    # OpenID Connect issuer: the ID token's expected "iss", and where the
+    # signing keys are discovered (<issuer>/.well-known/openid-configuration).
+    # Required with OAUTH_CLAIMS_SOURCE=id_token.
+    OAUTH_ISSUER: str = ""
+    # Signing keys (JWKS) URL, if not the one discovery names; e.g. an
+    # in-cluster address for a provider whose public URL the app can't reach.
+    OAUTH_JWKS_URL: str = ""
+    # Claim that identifies the user in LiteLLM (its user_id), e.g. "sub" or
+    # Entra's "oid". Empty: the email, as before. Set it when emails can
+    # change or be reused; the email is then stored as the user's email.
+    OAUTH_USER_ID_FIELD: str = ""
 
     # Session cookie (used by oauth mode)
     SESSION_SECRET: str = ""

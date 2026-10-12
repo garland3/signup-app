@@ -68,6 +68,13 @@ def _enforce_startup_safety(settings) -> None:
                 "ALLOW_INSECURE_STARTUP=true"
             )
 
+    if (
+        settings.AUTH_MODE == "oauth"
+        and settings.OAUTH_CLAIMS_SOURCE == "id_token"
+        and not settings.OAUTH_ISSUER
+    ):
+        problems.append("OAUTH_CLAIMS_SOURCE=id_token requires OAUTH_ISSUER")
+
     if settings.AUTH_MODE == "oauth" and not settings.SESSION_SECRET:
         problems.append("SESSION_SECRET must be set when AUTH_MODE=oauth")
 

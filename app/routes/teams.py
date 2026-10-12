@@ -51,10 +51,10 @@ async def list_available_teams(request: Request):
     """Teams the current user may join, excluding ones already joined."""
     _require_teams_enabled()
     client = _get_client()
-    user_email = request.state.user_email
+    user_id = request.state.user_id
     try:
-        available = await client.list_available_teams(user_id=user_email)
-        joined = await client.list_teams(user_id=user_email)
+        available = await client.list_available_teams(user_id=user_id)
+        joined = await client.list_teams(user_id=user_id)
     except Exception as e:
         raise _upstream_error("list_available_teams", e)
 
@@ -70,17 +70,19 @@ async def list_available_teams(request: Request):
 async def join_team(body: JoinTeamRequest, request: Request):
     """Self-service: add the CURRENT user to a team they are entitled to.
 
-    The target is always ``request.state.user_email`` (never a client-supplied
-    email), the team must be in the caller's own available set, and the role is
-    pinned to "user" so a user cannot grant themselves team-admin.
+    The target is always the signed-in user (``request.state.user_id``), never
+    a client-supplied one, the team must be in the caller's own available set,
+    and the role is pinned to "user" so a user cannot grant themselves
+    team-admin.
     """
     _require_teams_enabled()
     client = _get_client()
     user_email = request.state.user_email
+    user_id = request.state.user_id
     team_id = body.team_id
 
     try:
-        joined = await client.list_teams(user_id=user_email)
+        joined = await client.list_teams(user_id=user_id)
     except Exception as e:
         raise _upstream_error("list_teams", e)
     if team_id in {t.get("team_id") for t in joined}:
@@ -89,7 +91,7 @@ async def join_team(body: JoinTeamRequest, request: Request):
         )
 
     try:
-        available = await client.list_available_teams(user_id=user_email)
+        available = await client.list_available_teams(user_id=user_id)
     except Exception as e:
         raise _upstream_error("list_available_teams", e)
     if team_id not in {t.get("team_id") for t in available}:
@@ -98,12 +100,12 @@ async def join_team(body: JoinTeamRequest, request: Request):
 
     # Ensure the user exists in LiteLLM ("add or create") before adding them.
     try:
-        await client.ensure_user(user_email)
+        await client.ensure_user(user_id, email=user_email)
     except Exception as e:
         raise _upstream_error("ensure_user", e)
 
     try:
-        await client.add_team_member(team_id, user_email, role="user")
+        await client.add_team_member(team_id, user_id, role="user")
     except httpx.HTTPStatusError as e:
         status = e.response.status_code if e.response is not None else None
         text = (e.response.text if e.response is not None else "").lower()

@@ -24,18 +24,18 @@ async def me(request: Request):
         # unknown (not empty), so it can show an error rather than treat the
         # user as having no teams. Key creation re-checks membership itself
         # and fails closed.
-        teams, ok = await _load_user_teams(request.state.user_email)
+        teams, ok = await _load_user_teams(request.state.user_id)
         payload["teams"] = teams
         payload["teams_unavailable"] = not ok
     return payload
 
 
-async def _load_user_teams(user_email: str) -> tuple[list[dict], bool]:
+async def _load_user_teams(user_id: str) -> tuple[list[dict], bool]:
     try:
         client = LiteLLMClient(get_settings())
-        teams = await client.list_teams(user_id=user_email)
+        teams = await client.list_teams(user_id=user_id)
     except Exception as e:
-        logger.warning("Could not load teams for %s: %s", user_email, e)
+        logger.warning("Could not load teams for %s: %s", user_id, e)
         return [], False
     out = []
     for t in teams:
