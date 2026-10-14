@@ -122,7 +122,9 @@ _COLLAPSE_DASH_RE = re.compile(r"-+")
 # LiteLLM duration format: a positive integer followed by a unit suffix.
 # Supported units (per LiteLLM docs): s, m, h, d, mo. No spaces, no spelled-
 # out words ("1 day"), no unsupported units (w, y).
-_DURATION_RE = re.compile(r"^(\d+)(s|m|h|d|mo)$")
+# ASCII digits only ([0-9], not \d, which also matches e.g. Arabic-Indic digits),
+# as in the browser's check (static/app.js) and the startup check.
+_DURATION_RE = re.compile(r"^([0-9]+)(s|m|h|d|mo)$")
 _DURATION_HELP = (
     "Invalid duration. Use a positive integer followed by a unit: "
     "s (seconds), m (minutes), h (hours), d (days), or mo (months). "

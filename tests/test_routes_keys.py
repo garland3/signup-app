@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import respx
 from httpx import AsyncClient, ASGITransport, Response
@@ -1198,6 +1200,69 @@ async def test_update_key_over_max_duration_rejected(app, max_duration):
 
     assert r.status_code == 400
     assert len(respx.calls) == 0
+
+
+def _mock_key_update():
+    """An owned key (key/info) and key/update, which echoes the request."""
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", "blocked": False,
+            "created_at": "2025-01-01T00:00:00Z",  # long ago: renewal isn't bounded by it
+        })
+    )
+    return respx.post(f"{LITELLM}/key/update").mock(
+        side_effect=lambda request: Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", "blocked": False, "spend": 0,
+            **json.loads(request.content),
+        })
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_within_max_duration_renews_it(app, max_duration):
+    """A PATCH within the limit sends the duration as given: a new period from
+    now, however old the key (the cap is per period, README)."""
+    max_duration("30d")
+    update = _mock_key_update()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert sent["duration"] == "30d" and sent["metadata"]["duration"] == "30d"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_without_duration_is_unaffected_by_the_limit(app, max_duration):
+    max_duration("30d")
+    update = _mock_key_update()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"max_budget": 5}, headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert "duration" not in sent and sent["max_budget"] == 5
+
+
+@pytest.mark.parametrize("duration", ["\u0669\u0660d", "\uff19\uff10d"])  # Arabic-Indic, fullwidth "90d"
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_ascii_digits_are_not_a_duration(app, duration):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "duration": duration}, headers=AUTH)
+    assert r.status_code == 400
+    assert len(respx.calls) == 0
+
+
+def test_startup_rejects_non_ascii_max_key_duration():
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(MAX_KEY_DURATION="\u0669\u0660d", FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
+    with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
+        _enforce_startup_safety(s)
 
 
 def test_within_compares_months_conservatively():

@@ -56,14 +56,19 @@ The app holds a single admin key (`LITELLM_ADMIN_KEY`) to manage keys on behalf 
 
 ## Key lifetimes (`MAX_KEY_DURATION`)
 
-`MAX_KEY_DURATION` (e.g. `90d`; units `s`, `m`, `h`, `d`, `mo`) caps how long a key
-made or changed through the app may last. Leave it blank for no limit.
+`MAX_KEY_DURATION` (e.g. `90d`; units `s`, `m`, `h`, `d`, `mo`) caps the duration a key
+made or changed through the app may be given. Leave it blank for no limit.
 
 - **A key with no duration** gets the maximum. Without a maximum, it never
   expires.
 - **A longer duration is refused** (400), when a key is made (`POST /api/keys`)
   and when its duration is changed (`PATCH /api/keys/{token}`). A month counts
   as 28 to 31 days, so `31d` doesn't fit in `1mo`.
+- **It caps each period, not a key's total life.** Changing a key's duration
+  (`PATCH`) starts a new period from that moment, as LiteLLM does, so an owner
+  can renew a key before it expires, each time for at most the maximum. Keys
+  that must end for good are deleted or blocked, by their owner or by whatever
+  removes people's access (the identity provider's side).
 - **The Create API Key dialog** shows the maximum under the duration field, says
   what an empty field means, and checks the duration before sending it. The
   server's check is the one that counts.
