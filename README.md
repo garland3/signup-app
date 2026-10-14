@@ -350,8 +350,10 @@ The app reads groups only when someone uses it, so it can't notice that a person
 has left a group, or the organization. **It doesn't remove LiteLLM team members
 or revoke keys.** Requests go straight to LiteLLM with the key, so without
 something else, a person who leaves a group keeps their keys in that team until
-the keys expire (`MAX_KEY_DURATION` bounds that), and stays a member of the
-LiteLLM team.
+the keys expire, if they expire at all (a key made without a duration never
+does), and stays a member of the LiteLLM team. The app itself refuses them new
+keys in that team, and changes or unblocking of their keys there (both re-read
+their groups first); they can still block or delete those keys.
 
 A deployment using `TEAM_SOURCE=claims` must therefore run a reconciler beside
 the app, which periodically, for each team:

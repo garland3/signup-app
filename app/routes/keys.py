@@ -367,7 +367,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     # Teams from claims: the person is in the team by the identity provider's
     # say; make them a LiteLLM member too, so the team's per-member limits
-    # apply to their keys.
+    # apply to their keys. If generating the key then fails, they stay a member;
+    # harmless, since membership follows the group (the reconciler, README).
     if team_id and from_claims:
         try:
             await client.ensure_team_member(team_id, user_id)
@@ -456,6 +457,29 @@ def _neg_created(created: str) -> str:
     return "".join(chr(255 - ord(c)) for c in (created or ""))
 
 
+async def _require_current_team(request: Request, client: LiteLLMClient, info: dict) -> None:
+    """With teams from claims, the key's team must still be one of the person's
+    teams, re-read from the identity provider as for a new key. Someone taken
+    out of a group can't then widen (budget, limits, models, duration) or unblock
+    their keys in it before the reconciler removes them. Deleting and blocking
+    only reduce access, so they don't call this.
+    """
+    s = get_settings()
+    if not (s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims"):
+        return
+    groups = await refresh_groups(request)
+    try:
+        teams = await teams_for_groups(groups, client)
+    except Exception as e:
+        raise _upstream_error("list_teams", e)
+    if not info.get("team_id") or info["team_id"] not in {t["team_id"] for t in teams}:
+        raise HTTPException(
+            status_code=403,
+            detail="You're no longer in this key's team, so it can't be changed or unblocked. "
+            "You can still block or delete it.",
+        )
+
+
 @router.patch("/keys/{token}")
 async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     _reject_raw_api_key(token)
@@ -478,6 +502,7 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
             status_code=400,
             detail="This key was deleted, so it can't be changed. Create a new key instead.",
         )
+    await _require_current_team(request, client, info)
 
     kwargs = {}
     if body.key_alias is not None:
@@ -580,7 +605,8 @@ async def unblock_key(token: str, request: Request):
     user_email = request.state.user_email
     user_id = request.state.user_id
 
-    await _verify_key_ownership(client, token, user_id)
+    info = await _verify_key_ownership(client, token, user_id)
+    await _require_current_team(request, client, info)
 
     try:
         result = await client.unblock_key(key=token)

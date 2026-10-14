@@ -1,4 +1,5 @@
 """TEAM_SOURCE=claims: teams from the identity provider's groups."""
+import asyncio
 import json
 from urllib.parse import parse_qs, urlparse
 
@@ -66,6 +67,9 @@ class Provider:
         self.extra = {}  # other claims in the next ID token
         self.refresh_token = refresh_token
         self.refresh_status = 200
+        self.refresh_error = "invalid_grant"  # the error code with a refused refresh
+        self.refresh_id_token = True  # False: a refresh response without an ID token
+        self.used = set()  # refresh tokens already used: reusing one is refused (rotation)
         self.sub = "0b9f-sub"
         self.refreshes = 0
 
@@ -73,10 +77,16 @@ class Provider:
         form = parse_qs(request.content.decode())
         grant = form["grant_type"][0]
         if grant == "refresh_token":
+            token = form["refresh_token"][0]
+            if token in self.used:  # Keycloak "Revoke Refresh Token": reuse is refused
+                return Response(400, json={"error": "invalid_grant"})
+            self.used.add(token)
             self.refreshes += 1
             if self.refresh_status != 200:
-                return Response(self.refresh_status, json={"error": "invalid_grant"})
-            body = {"access_token": "at-2", "id_token": _token(self._claims(), sub=self.sub)}
+                return Response(self.refresh_status, json={"error": self.refresh_error})
+            body = {"access_token": "at-2"}
+            if self.refresh_id_token:
+                body["id_token"] = _token(self._claims(), sub=self.sub)
             body["refresh_token"] = f"rt-{self.refreshes + 1}"
             return Response(200, json=body)
         body = {"access_token": "at-1", "id_token": _token(self._claims(), nonce=self.nonce)}
@@ -268,8 +278,8 @@ async def test_without_a_refresh_token_groups_older_than_the_max_age(monkeypatch
     settings = _claims_settings(TEAM_CLAIMS_MAX_AGE_SECONDS=300)
     async with AsyncClient(transport=ASGITransport(app=_app(settings)), base_url="http://test") as c:
         await _sign_in(c, provider)
-        later = team_claims.time.time() + 400
-        monkeypatch.setattr(team_claims.time, "time", lambda: later)
+        later = team_claims._now() + 400
+        monkeypatch.setattr(team_claims, "_now", lambda: later)
         r = await c.post("/api/keys", json={"name": "k", "team_id": "project-general"}, headers=ORIGIN)
     assert r.status_code == 401
     assert not generate.called
@@ -388,7 +398,6 @@ async def test_entra_app_roles_and_a_single_string_claim():
     _mock_provider()
     _litellm()
     provider = Provider(None)
-    respx.post(TOKEN_URL).mock(side_effect=provider)
     settings = _claims_settings(GROUPS_FIELD="roles")
 
     def tokens(request):
@@ -425,3 +434,140 @@ def test_startup_refuses_claims_without_oauth_or_teams():
 
     with pytest.raises(RuntimeError, match="TEAM_SOURCE=claims"):
         _enforce_startup_safety(_settings(FEATURE_TEAMS_ENABLED=False, TEAM_SOURCE="claims"))
+
+
+def _key(team_id="t-alpha"):
+    """A key of the signed-in person's in team_id, and the routes that change it."""
+    info = {"info": {"token": "hashed-1", "user_id": "0b9f-sub", "team_id": team_id, "key_alias": "alice-k"}}
+    respx.get(f"{LITELLM}/key/info").mock(return_value=Response(200, json=info))
+    return {
+        name: respx.post(f"{LITELLM}/key/{name}").mock(return_value=Response(200, json=info["info"]))
+        for name in ("update", "block", "unblock", "delete")
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_left_the_group_no_changing_or_unblocking_its_keys():
+    _mock_provider()
+    _litellm()
+    routes = _key("t-alpha")
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.groups = ["project-general"]  # taken out of project-alpha
+        patch = await c.patch("/api/keys/hashed-1", json={"max_budget": 100}, headers=ORIGIN)
+        unblock = await c.post("/api/keys/hashed-1/unblock", headers=ORIGIN)
+        assert patch.status_code == 403 and unblock.status_code == 403
+        assert not routes["update"].called and not routes["unblock"].called
+        block = await c.post("/api/keys/hashed-1/block", headers=ORIGIN)
+        delete = await c.delete("/api/keys/hashed-1", headers=ORIGIN)
+    assert block.status_code == 200 and delete.status_code in (200, 204)  # these only reduce access
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_still_in_the_group_changes_its_keys():
+    _mock_provider()
+    _litellm()
+    routes = _key("t-alpha")
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        patch = await c.patch("/api/keys/hashed-1", json={"max_budget": 100}, headers=ORIGIN)
+        unblock = await c.post("/api/keys/hashed-1/unblock", headers=ORIGIN)
+    assert patch.status_code == 200 and unblock.status_code == 200
+    assert routes["update"].called and routes["unblock"].called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refresh_error_other_than_invalid_grant_keeps_the_session():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.refresh_status, provider.refresh_error = 401, "invalid_client"  # e.g. a rotated client secret
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+        me = await c.get("/api/me")
+    assert r.status_code == 502  # the app's problem, not the person's
+    assert me.status_code == 200  # still signed in
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_concurrent_requests_share_one_refresh():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+
+    async def slow_provider(request):
+        if parse_qs(request.content.decode())["grant_type"][0] == "refresh_token":
+            await asyncio.sleep(0.05)  # keep the first refresh in flight
+        return provider(request)
+
+    respx.post(TOKEN_URL).mock(side_effect=slow_provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        a, b = await asyncio.gather(
+            c.post("/api/keys", json={"name": "k1", "team_id": "t-alpha"}, headers=ORIGIN),
+            c.post("/api/keys", json={"name": "k2", "team_id": "t-alpha"}, headers=ORIGIN),
+        )
+        me = await c.get("/api/me")
+    assert (a.status_code, b.status_code) == (201, 201)  # neither reused the refresh token
+    assert provider.refreshes == 1
+    assert me.status_code == 200
+    assert generate.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refresh_without_an_id_token_says_so():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.refresh_id_token = False
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert r.status_code == 502
+    assert "no ID token" in r.json()["detail"]
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hasgroups_is_about_groups_not_app_roles():
+    _mock_provider()
+    _litellm()
+    provider = Provider(None)
+    provider.extra = {"roles": ["project-alpha"], "hasgroups": True}
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings(GROUPS_FIELD="roles"))), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        me = (await c.get("/api/me")).json()
+    assert [t["team_id"] for t in me["teams"]] == ["t-alpha"] and me["teams_unavailable"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_group_without_a_team_reloads_the_teams_at_most_every_few_seconds():
+    _mock_provider()
+    _litellm()
+    provider = Provider(GROUPS)  # project-gamma names no team
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        for _ in range(3):
+            assert (await c.get("/api/me")).status_code == 200
+    all_teams = [
+        call for call in respx.calls
+        if call.request.url.path == "/team/list" and not call.request.url.params.get("user_id")
+    ]
+    assert len(all_teams) == 2  # the first load, and one forced reload
