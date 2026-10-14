@@ -8,10 +8,10 @@
     <link rel="stylesheet" href="{{ROOT_PATH}}/static/style.css">
 </head>
 <body>
-    <div class="container">
+    <div class="container container-wide">
         <h1 id="app-title" class="app-title">API Keys</h1>
         <nav id="nav-links" class="nav-links hidden"></nav>
-        <header>
+        <header class="keys-header">
             <span class="page-tabs">
                 <a class="page-tab page-tab-active" href="{{ROOT_PATH}}/">API Keys</a>
                 <a class="page-tab" href="{{ROOT_PATH}}/dashboard">Usage</a>
@@ -27,24 +27,27 @@
             <button id="join-team-btn" class="hidden">Join a team</button>
         </div>
 
-        <table id="keys-table">
-            <thead>
-                <tr id="keys-table-head">
-                    <th>Name</th>
-                    <th id="team-col-header" class="hidden">Team</th>
-                    <th>Key</th>
-                    <th>Created</th>
-                    <th>Duration</th>
-                    <th id="spend-col-header">Spend</th>
-                    <th id="budget-col-header">Budget</th>
-                    <th>Status</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody id="keys-body"></tbody>
-        </table>
+        <div id="keys-table-box" class="table-scroll hidden" tabindex="0" role="region" aria-label="API keys">
+            <table id="keys-table">
+                <thead>
+                    <tr id="keys-table-head">
+                        <th>Name</th>
+                        <th id="team-col-header" class="hidden">Team</th>
+                        <th>Key</th>
+                        <th>Created</th>
+                        <th>Duration</th>
+                        <th id="spend-col-header">Spend</th>
+                        <th id="budget-col-header">Budget</th>
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="keys-body"></tbody>
+            </table>
+        </div>
 
         <p id="no-keys" class="hidden">No API keys yet. Create one to get started.</p>
+        <p id="keys-error" class="hidden" role="alert">Couldn't load your keys. Reload the page to try again.</p>
     </div>
 
     <!-- Create Key Modal -->

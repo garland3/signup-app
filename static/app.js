@@ -271,9 +271,21 @@ function renderTeamSelect() {
 }
 
 async function loadKeys() {
-    var r = await fetch(API_BASE + "/keys");
-    if (!r.ok) return;
-    currentKeys = await r.json();
+    // The table's box stays hidden until the keys have loaded, so a failed
+    // first load says so rather than leave the area blank. A failed reload
+    // after a change keeps the keys already shown, with a notice.
+    var keys;
+    try {
+        var r = await fetch(API_BASE + "/keys");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        keys = await r.json();
+    } catch (e) {
+        if (keysLoaded) showToast("Couldn't refresh your keys. Reload the page to see the latest.", "error");
+        else document.getElementById("keys-error").classList.remove("hidden");
+        return;
+    }
+    document.getElementById("keys-error").classList.add("hidden");
+    currentKeys = keys;
     keysLoaded = true;
     renderKeys();
 }
@@ -281,15 +293,17 @@ async function loadKeys() {
 function renderKeys() {
     var tbody = document.getElementById("keys-body");
     var noKeys = document.getElementById("no-keys");
-    var table = document.getElementById("keys-table");
+    // The table's scroll box, not just the table, so an empty box isn't left
+    // in the keyboard's tab order (it's hidden until the keys have loaded).
+    var tableBox = document.getElementById("keys-table-box");
 
     if (currentKeys.length === 0) {
-        table.classList.add("hidden");
+        tableBox.classList.add("hidden");
         noKeys.classList.remove("hidden");
         return;
     }
 
-    table.classList.remove("hidden");
+    tableBox.classList.remove("hidden");
     noKeys.classList.add("hidden");
 
     var metaFields = appConfig.required_metadata || [];
@@ -300,7 +314,7 @@ function renderKeys() {
     currentKeys.forEach(function(k) {
         var tr = document.createElement("tr");
         appendCell(tr, k.name);
-        if (teamsEnabled) appendCell(tr, teamLabel(k));
+        if (teamsEnabled) appendCell(tr, teamLabel(k)).className = "team-cell";
 
         var prefixCell = document.createElement("td");
         var prefixSpan = document.createElement("span");
@@ -352,6 +366,7 @@ function appendCell(tr, text) {
     var td = document.createElement("td");
     td.textContent = text == null ? "" : String(text);
     tr.appendChild(td);
+    return td;
 }
 
 function showCreateModal() {

@@ -17,6 +17,14 @@ body {
     padding: 0 20px;
 }
 
+/* The Keys and Usage pages' width: the same on both, so switching between them
+   doesn't move anything, and wide enough for the keys table, which wraps key
+   names at their dashes. A name with a long unbroken part, or a narrower window,
+   makes the table scroll sideways in its box (.table-scroll). */
+.container-wide {
+    max-width: 1180px;
+}
+
 .app-title {
     text-align: center;
     font-size: 32px;
@@ -54,6 +62,27 @@ header {
     gap: 12px;
     margin-bottom: 24px;
     flex-wrap: wrap;
+}
+
+/* The Keys page header, three columns: the page tabs at the left, the user in
+   the middle (centered under the title, whatever the tabs' and Log out's
+   widths), Log out at the right. The side columns keep their content's width;
+   the user's column may shrink, and a long email wraps. Narrow windows, where
+   they don't fit in a row, wrap them centered. */
+.keys-header {
+    display: grid;
+    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+}
+
+.keys-header .page-tabs { justify-self: start; }
+.keys-header #user-email { justify-self: center; min-width: 0; overflow-wrap: anywhere; text-align: center; }
+.keys-header .logout-form { justify-self: end; }
+
+@media (max-width: 32.5em) {  /* 520px at the default text size; follows text zoom */
+    .keys-header {
+        display: flex;
+        justify-content: center;
+    }
 }
 
 .logout-form {
@@ -150,6 +179,34 @@ button.danger {
 
 button.danger:hover {
     background: #fef2f2;
+}
+
+/* On a window narrower than the table, the table scrolls sideways in place.
+   The padding keeps the table's shadow from being clipped: it matches the
+   shadow's reach (box-shadow 0 1px 3px on table: 2px above, 3px at the sides,
+   4px below). The negative margin keeps the table where it would be without
+   the box. The box can take the keyboard focus (index.html), so it can be
+   scrolled without a mouse. */
+.table-scroll {
+    overflow-x: auto;
+    padding: 2px 3px 4px;
+    margin: -2px -3px -4px;
+}
+
+.table-scroll:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+/* Team names (the Team column, often "project-..." names) stay on one line
+   where the window is wide enough for that (66em, 1056px at the default text
+   size); on a narrower one they wrap too, so the table keeps fitting before it
+   has to scroll. */
+@media (min-width: 66em) {
+    #team-col-header,
+    #keys-table .team-cell {
+        white-space: nowrap;
+    }
 }
 
 table {
@@ -331,7 +388,8 @@ td {
     background: #1f2937;
 }
 
-#no-keys {
+#no-keys,
+#keys-error {
     text-align: center;
     color: #6b7280;
     padding: 40px;

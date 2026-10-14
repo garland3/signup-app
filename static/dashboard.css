@@ -1,7 +1,5 @@
-/* Layout overrides for the wider dashboard view. */
-.container-wide {
-    max-width: 1180px;
-}
+/* Layout overrides for the dashboard view (its width, .container-wide, is in
+   style.css, shared with the Keys page). */
 
 .dash-header {
     display: flex;
