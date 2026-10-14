@@ -20,7 +20,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -237,8 +237,13 @@ async def generate_key(body: GenerateKeyRequest, authorization: str = Header()):
 async def list_keys(
     user_id: str = "",
     return_full_object: str = "false",
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=100),
+    sort_order: str = "desc",
     authorization: str = Header(),
 ):
+    """Paged like LiteLLM's: 10 keys a page by default, at most 100, newest
+    first (sort_by=created_at is the only order the app asks for)."""
     check_admin(authorization)
 
     result = []
@@ -250,8 +255,15 @@ async def list_keys(
         entry["token"] = entry["token"][:8] + "..."
         entry.pop("key", None)
         result.append(entry)
+    result.sort(key=lambda e: e.get("created_at") or "", reverse=sort_order != "asc")
 
-    return result
+    total_pages = max(1, -(-len(result) // size))
+    return {
+        "keys": result[(page - 1) * size:page * size],
+        "total_count": len(result),
+        "current_page": page,
+        "total_pages": total_pages,
+    }
 
 
 @app.get("/key/info")
