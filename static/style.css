@@ -25,31 +25,6 @@ body {
     max-width: 1180px;
 }
 
-/* On a window narrower than the table, the table scrolls sideways in place.
-   The padding keeps the table's shadow from being clipped. It can take the
-   keyboard focus (index.html), so it can be scrolled without a mouse. */
-.table-scroll {
-    overflow-x: auto;
-    padding: 0 3px 3px;
-    margin: 0 -3px;
-}
-
-/* Team names (the Team column, often "project-..." names) stay on one line
-   where the window is wide enough for that (66em, 1056px at the default text
-   size); on a narrower one they wrap too, so the table keeps fitting before it
-   has to scroll. */
-@media (min-width: 66em) {
-    #team-col-header,
-    #keys-table .team-cell {
-        white-space: nowrap;
-    }
-}
-
-.table-scroll:focus-visible {
-    outline: 2px solid #2563eb;
-    outline-offset: 2px;
-}
-
 .app-title {
     text-align: center;
     font-size: 32px;
@@ -204,6 +179,32 @@ button.danger {
 
 button.danger:hover {
     background: #fef2f2;
+}
+
+/* On a window narrower than the table, the table scrolls sideways in place.
+   The padding keeps the table's shadow from being clipped, and the negative
+   margin keeps the table where it would be without the box. It can take the
+   keyboard focus (index.html), so it can be scrolled without a mouse. */
+.table-scroll {
+    overflow-x: auto;
+    padding: 3px;
+    margin: -3px -3px 0;
+}
+
+.table-scroll:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+/* Team names (the Team column, often "project-..." names) stay on one line
+   where the window is wide enough for that (66em, 1056px at the default text
+   size); on a narrower one they wrap too, so the table keeps fitting before it
+   has to scroll. */
+@media (min-width: 66em) {
+    #team-col-header,
+    #keys-table .team-cell {
+        white-space: nowrap;
+    }
 }
 
 table {

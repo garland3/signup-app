@@ -246,7 +246,9 @@ async function loadKeys() {
 function renderKeys() {
     var tbody = document.getElementById("keys-body");
     var noKeys = document.getElementById("no-keys");
-    var table = document.getElementById("keys-table");
+    // The table's scroll box, not just the table, so an empty box isn't left
+    // in the keyboard's tab order (it's hidden until the keys have loaded).
+    var table = document.getElementById("keys-table-box");
 
     if (currentKeys.length === 0) {
         table.classList.add("hidden");
