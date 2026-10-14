@@ -57,7 +57,12 @@ ID="probe-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 checkpoint
 [ "${#ID}" -eq 38 ] || { echo "could not generate a probe id" >&2; exit 1; }
 USER_ID="${ID}@example.invalid"
-WORK="$(mktemp -d)"
+# Private work directory (mode 700) for responses and for the files that carry
+# the bearer token; never continue without one.
+if ! WORK="$(mktemp -d)" || [ -z "$WORK" ] || [ ! -d "$WORK" ]; then
+  echo "could not create a private work directory with mktemp -d" >&2
+  exit 1
+fi
 BODY="$WORK/body.json"
 
 # Resources are recorded when their creation succeeded or its outcome is
