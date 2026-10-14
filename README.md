@@ -307,6 +307,7 @@ FEATURE_TEAMS_ENABLED=true
 TEAM_SOURCE=claims
 GROUPS_FIELD=groups          # the claim holding the groups; Entra ID app roles: roles
 TEAM_GROUP_PREFIX=project-   # only these groups are teams
+TEAM_CLAIMS_MAX_AGE_SECONDS=0  # without a refresh token: trust sign-in groups this long (0: never)
 ```
 
 - **A person's teams** are the groups in their sign-in claims that start with
@@ -317,18 +318,59 @@ TEAM_GROUP_PREFIX=project-   # only these groups are teams
   the Join button stays hidden. `GET /api/me` reports `team_source: "claims"`.
 - **Before a key is made** the app refreshes the person's tokens (refresh-token
   grant) and re-reads their groups, so someone taken out of a group can't make
-  keys in it from an old session. If the provider refuses the refresh (the
-  sign-in session ended, the person was disabled), the app's session ends and
-  the person signs in again. Without a refresh token (Entra ID issues one only
-  with the `offline_access` scope), the groups from sign-in are used.
-- **LiteLLM membership follows:** the app adds the person to the team
-  (`/team/member_add`, role `user`) before making the key, so the team's
-  per-member budget applies. It never removes members: when someone leaves a
-  group, removing them from the team, and their keys in it, is the job of
-  whatever manages the identity provider's side (a reconciler).
+  keys in it from an old session. Anything uncertain fails closed:
+  - the provider refuses the refresh (the sign-in session ended, the person was
+    disabled, the refresh token was revoked): the app's session ends (401), and
+    the person signs in again;
+  - the refreshed token is for someone else: the session ends (401);
+  - the refreshed token has no groups claim: the person has no teams, so no key;
+  - the token left the groups out because there are too many (Entra ID's
+    "groups overage": `_claim_names`, or `hasgroups`): refused (403), and
+    `/api/me` reports the teams as unavailable rather than empty. Send fewer
+    groups (Entra ID: "Groups assigned to the application", or app roles);
+  - **no refresh token** (the provider issued none; Entra ID issues one only with
+    the `offline_access` scope): the person must sign in again (401) to make a
+    key, so groups are never older than the sign-in that just happened. A
+    deployment that can't get refresh tokens can set
+    `TEAM_CLAIMS_MAX_AGE_SECONDS` to accept the groups from sign-in up to that
+    age: someone removed from a group can then still make keys in it for that
+    long.
+- **LiteLLM membership follows:** before making the key the app checks whether
+  the person is a member of the team (`GET /team/list?user_id=`), and adds them
+  (`/team/member_add`, role `user`) if not, so the team's per-member budget
+  applies. A failed add is checked again, in case a concurrent request added
+  them.
 - Use it with `OAUTH_CLAIMS_SOURCE=id_token` for groups in the ID token (Keycloak:
   a group membership mapper on the client; Entra ID: app roles), or with
   userinfo if the provider puts the groups there.
+
+#### Required: a reconciler for people who leave
+
+The app reads groups only when someone uses it, so it can't notice that a person
+has left a group, or the organization. **It doesn't remove LiteLLM team members
+or revoke keys.** Requests go straight to LiteLLM with the key, so without
+something else, a person who leaves a group keeps their keys in that team until
+the keys expire (`MAX_KEY_DURATION` bounds that), and stays a member of the
+LiteLLM team.
+
+A deployment using `TEAM_SOURCE=claims` must therefore run a reconciler beside
+the app, which periodically, for each team:
+
+1. reads the identity provider's current members of the team's group;
+2. removes LiteLLM team members who are no longer in it
+   (`POST /team/member_delete` with `team_id` and `user_id`). LiteLLM then
+   deletes that member's keys in the team itself, so they stop working at once;
+3. for people disabled or deleted in the identity provider, deletes all their
+   keys.
+
+The reconciler must match people by the same user ID the app uses
+(`OAUTH_USER_ID_FIELD`), and should change nothing when the directory can't be
+read or a group is missing, so an outage or a renamed group doesn't remove
+everyone. Examples: a SCIM bridge driven by the identity provider's
+provisioning (the design in PR #42), or a job reading the identity provider's
+admin API (the platform this app was first deployed with runs one in its key
+broker). The integration tests below check step 2's behavior against a real
+LiteLLM.
 
 ## API Endpoints
 
@@ -363,4 +405,14 @@ deployment.
 
 ```bash
 uv run --extra dev pytest tests/ -v
+```
+
+Integration tests against a real LiteLLM (team membership, repeated adds, team
+lookup, and `/team/member_delete` deleting the member's keys) run when a proxy
+is given; otherwise they're skipped. Use a staging proxy: they create and delete
+throwaway `probe-<uuid>` teams and users with the admin key.
+
+```bash
+LITELLM_INTEGRATION_URL=http://localhost:4000 LITELLM_INTEGRATION_KEY=sk-... \
+  uv run --extra dev pytest tests/test_litellm_integration.py -v
 ```

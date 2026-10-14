@@ -62,7 +62,8 @@ class Provider:
     """The token endpoint: the sign-in's tokens, then each refresh's."""
 
     def __init__(self, groups, *, refresh_token="rt-1"):
-        self.groups = groups  # groups in the next ID token
+        self.groups = groups  # groups in the next ID token (None: no groups claim)
+        self.extra = {}  # other claims in the next ID token
         self.refresh_token = refresh_token
         self.refresh_status = 200
         self.sub = "0b9f-sub"
@@ -75,13 +76,19 @@ class Provider:
             self.refreshes += 1
             if self.refresh_status != 200:
                 return Response(self.refresh_status, json={"error": "invalid_grant"})
-            body = {"access_token": "at-2", "id_token": _token(groups=self.groups, sub=self.sub)}
+            body = {"access_token": "at-2", "id_token": _token(self._claims(), sub=self.sub)}
             body["refresh_token"] = f"rt-{self.refreshes + 1}"
             return Response(200, json=body)
-        body = {"access_token": "at-1", "id_token": _token(groups=self.groups, nonce=self.nonce)}
+        body = {"access_token": "at-1", "id_token": _token(self._claims(), nonce=self.nonce)}
         if self.refresh_token:
             body["refresh_token"] = self.refresh_token
         return Response(200, json=body)
+
+    def _claims(self):
+        claims = dict(self.extra)
+        if self.groups is not None:
+            claims["groups"] = self.groups
+        return claims
 
 
 async def _sign_in(c: AsyncClient, provider: Provider):
@@ -92,12 +99,29 @@ async def _sign_in(c: AsyncClient, provider: Provider):
     assert cb.status_code == 302
 
 
-def _litellm(*, member_add_status=200, member_add_body=None):
-    respx.get(f"{LITELLM}/team/list").mock(return_value=Response(200, json=TEAMS))
+def _litellm(*, members=(), member_add_status=200, member_after_failed_add=False):
+    """LiteLLM: every team (/team/list), the person's teams (?user_id=, from
+    ``members``), member_add (which adds to ``members`` unless it fails) and
+    key generation."""
+    members = set(members)
+
+    def team_list(request):
+        if request.url.params.get("user_id"):
+            return Response(200, json=[t for t in TEAMS if t["team_id"] in members])
+        return Response(200, json=TEAMS)
+
+    def add(request):
+        team = json.loads(request.content)["team_id"]
+        if member_add_status != 200:
+            if member_after_failed_add:  # someone else's request added them meanwhile
+                members.add(team)
+            return Response(member_add_status, json={"error": "failed"})
+        members.add(team)
+        return Response(200, json={})
+
+    respx.get(f"{LITELLM}/team/list").mock(side_effect=team_list)
     respx.get(f"{LITELLM}/user/info").mock(return_value=Response(200, json={"user_id": "0b9f-sub"}))
-    member_add = respx.post(f"{LITELLM}/team/member_add").mock(
-        return_value=Response(member_add_status, json=member_add_body or {})
-    )
+    member_add = respx.post(f"{LITELLM}/team/member_add").mock(side_effect=add)
     generate = respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={"key": "sk-new", "token_id": "t1", "user_id": "0b9f-sub"})
     )
@@ -206,7 +230,7 @@ async def test_refresh_for_another_person_ends_the_session():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_without_a_refresh_token_the_sign_in_groups_apply():
+async def test_without_a_refresh_token_sign_in_again():
     _mock_provider()
     _, generate = _litellm()
     provider = Provider(GROUPS, refresh_token=None)
@@ -214,22 +238,119 @@ async def test_without_a_refresh_token_the_sign_in_groups_apply():
     async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
         await _sign_in(c, provider)
         r = await c.post("/api/keys", json={"name": "k", "team_id": "project-general"}, headers=ORIGIN)
-    assert r.status_code == 201
+    assert r.status_code == 401  # the sign-in's groups can't be re-checked
     assert provider.refreshes == 0
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_without_a_refresh_token_recent_groups_within_the_max_age():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS, refresh_token=None)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    settings = _claims_settings(TEAM_CLAIMS_MAX_AGE_SECONDS=300)
+    async with AsyncClient(transport=ASGITransport(app=_app(settings)), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "project-general"}, headers=ORIGIN)
+    assert r.status_code == 201
     assert json.loads(generate.calls[0].request.content)["team_id"] == "project-general"
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_already_a_member_is_fine():
+async def test_without_a_refresh_token_groups_older_than_the_max_age(monkeypatch):
     _mock_provider()
-    _, generate = _litellm(member_add_status=400, member_add_body={"error": "User already in team"})
+    _, generate = _litellm()
+    provider = Provider(GROUPS, refresh_token=None)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    settings = _claims_settings(TEAM_CLAIMS_MAX_AGE_SECONDS=300)
+    async with AsyncClient(transport=ASGITransport(app=_app(settings)), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        later = team_claims.time.time() + 400
+        monkeypatch.setattr(team_claims.time, "time", lambda: later)
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "project-general"}, headers=ORIGIN)
+    assert r.status_code == 401
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refreshed_token_without_groups_has_no_teams():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.groups = None  # the refreshed ID token has no groups claim
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert r.status_code == 400  # not a team of theirs any more
+    assert not generate.called
+
+
+OVERAGE = {"_claim_names": {"groups": "src1"}, "_claim_sources": {"src1": {"endpoint": "https://graph.example/x"}}}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_groups_overage_at_refresh_is_refused():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.groups, provider.extra = None, OVERAGE  # too many groups to list
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+        assert r.status_code == 403
+        assert "too many" in r.json()["detail"]
+        me = (await c.get("/api/me")).json()
+    assert not generate.called
+    assert me["teams"] == [] and me["teams_unavailable"] is True  # unknown, not none
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_groups_overage_at_sign_in_shows_teams_unknown():
+    _mock_provider()
+    _litellm()
+    provider = Provider(None)
+    provider.extra = {"hasgroups": True}
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        me = (await c.get("/api/me")).json()
+    assert me["teams"] == [] and me["teams_unavailable"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_already_a_member_is_not_added_again():
+    _mock_provider()
+    member_add, generate = _litellm(members={"t-alpha"})
     provider = Provider(GROUPS)
     respx.post(TOKEN_URL).mock(side_effect=provider)
     async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
         await _sign_in(c, provider)
         r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
     assert r.status_code == 201
+    assert not member_add.called  # membership looked up, not inferred from an error
+    assert generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_failed_add_is_fine_if_they_are_a_member_after_all():
+    _mock_provider()
+    _, generate = _litellm(member_add_status=400, member_after_failed_add=True)
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert r.status_code == 201  # a concurrent request added them
     assert generate.called
 
 

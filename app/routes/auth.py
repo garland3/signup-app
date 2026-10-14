@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 from app.core.audit import audit
 from app.core.config import Settings, get_settings
 from app.core.oidc import IdTokenError, verify_id_token
-from app.core.team_claims import groups_from_claims
+from app.core.team_claims import store_groups
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ async def callback(request: Request):
     if s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims":
         # Teams come from the identity provider: keep the groups, and the
         # refresh token to re-read them before a key is made.
-        request.session["groups"] = groups_from_claims(claims, s)
+        store_groups(request.session, claims, s)
         if tokens.get("refresh_token"):
             request.session["refresh_token"] = tokens["refresh_token"]
     audit("login_success", user=email, user_id=user_id)

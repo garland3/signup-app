@@ -37,6 +37,8 @@ async def me(request: Request):
 
 async def _claim_teams(request: Request) -> tuple[list[dict], bool]:
     """Teams from the sign-in's groups (re-checked when a key is made)."""
+    if request.session.get("groups_overage"):
+        return [], False  # unknown, not none: the token left them out
     try:
         teams = await teams_for_groups(session_groups(request), LiteLLMClient(get_settings()))
     except Exception as e:

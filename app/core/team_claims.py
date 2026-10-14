@@ -7,6 +7,15 @@ Operators create the teams; the identity provider decides who is in them.
 Groups are read at sign-in, and again before a key is made: the app refreshes
 the person's tokens (refresh-token grant) and re-reads the claims, so someone
 taken out of a group can't make keys in it with an old session.
+
+Anything uncertain fails closed: a refresh the provider refuses, a refreshed
+token for someone else, no refresh token (unless TEAM_CLAIMS_MAX_AGE_SECONDS
+allows the sign-in's groups), or a token whose groups were left out because
+there are too many of them (Entra ID's "groups overage").
+
+This app doesn't remove people from LiteLLM teams, or delete their keys, when
+they leave a group: it only acts when someone uses it. A reconciler outside it
+must (README: "Teams from the identity provider").
 """
 from __future__ import annotations
 
@@ -30,6 +39,34 @@ def reset_cache() -> None:
     """For tests."""
     global _teams_cache
     _teams_cache = None
+
+
+OVERAGE_DETAIL = (
+    "Your sign-in doesn't list your groups (there are too many), so your teams can't be "
+    "checked. Ask your administrators to send only the groups this app uses."
+)
+
+
+def groups_overage(claims: dict, settings: Settings) -> bool:
+    """Whether the token left the groups out because there are too many.
+
+    Entra ID then omits the claim and points to Microsoft Graph instead
+    (``_claim_names`` naming the claim), or sets ``hasgroups`` in implicit-flow
+    tokens. The groups are unknown, not empty.
+    """
+    names = claims.get("_claim_names")
+    if isinstance(names, dict) and settings.GROUPS_FIELD in names:
+        return True
+    return claims.get("hasgroups") in (True, "true")
+
+
+def store_groups(session: dict, claims: dict, settings: Settings) -> list[str]:
+    """Keep the claims' team groups in the session, with when and whether they're known."""
+    groups = groups_from_claims(claims, settings)
+    session["groups"] = groups
+    session["groups_at"] = time.time()
+    session["groups_overage"] = groups_overage(claims, settings)
+    return groups
 
 
 def groups_from_claims(claims: dict, settings: Settings) -> list[str]:
@@ -78,7 +115,9 @@ async def refresh_groups(request: Request) -> list[str]:
     Fails closed: when the provider refuses the refresh (the sign-in session
     ended, the person was disabled), the app's session ends too (401). With
     no refresh token (the provider issued none; Entra ID needs the
-    offline_access scope), the groups from sign-in are used.
+    offline_access scope), the person must sign in again (401), unless the
+    groups from sign-in are younger than TEAM_CLAIMS_MAX_AGE_SECONDS. A token
+    that leaves the groups out (overage) is refused (403).
     """
     from app.routes.auth import claims_from_tokens  # avoid an import cycle
 
@@ -86,7 +125,13 @@ async def refresh_groups(request: Request) -> list[str]:
     session = request.session
     refresh_token = session.get("refresh_token")
     if not refresh_token:
-        return session_groups(request)
+        age = time.time() - float(session.get("groups_at") or 0)
+        if s.TEAM_CLAIMS_MAX_AGE_SECONDS and age <= s.TEAM_CLAIMS_MAX_AGE_SECONDS:
+            if session.get("groups_overage"):
+                raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
+            return session_groups(request)
+        audit("team_claims_stale", user=session.get("user_email"), age=int(age))
+        raise HTTPException(status_code=401, detail="Sign in again to confirm your teams")
     async with httpx.AsyncClient(timeout=10.0) as http:
         try:
             r = await http.post(
@@ -118,8 +163,10 @@ async def refresh_groups(request: Request) -> list[str]:
     if claims.get(field) != expected:
         session.clear()
         raise HTTPException(status_code=401, detail="Your sign-in has ended; sign in again")
-    groups = groups_from_claims(claims, s)
-    session["groups"] = groups
+    groups = store_groups(session, claims, s)
     if tokens.get("refresh_token"):
         session["refresh_token"] = tokens["refresh_token"]  # rotated
+    if session["groups_overage"]:
+        audit("team_claims_overage", user=session.get("user_email"))
+        raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
     return groups

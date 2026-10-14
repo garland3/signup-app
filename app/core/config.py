@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Entra ID: roles, the app roles) and the prefix of those that are teams.
     GROUPS_FIELD: str = "groups"
     TEAM_GROUP_PREFIX: str = "project-"
+    # TEAM_SOURCE=claims: groups are re-read (refresh-token grant) before each
+    # key is made. Without a refresh token the app can't re-read them, so it
+    # asks the person to sign in again, unless the groups from sign-in are
+    # younger than this many seconds (0: never trust them without a refresh).
+    TEAM_CLAIMS_MAX_AGE_SECONDS: int = 0
     # Optional URL path prefix the app is served under (e.g. "/start").
     # When set, all routes, static assets, and auth redirects are served
     # beneath this prefix. Leave blank to serve from the site root.

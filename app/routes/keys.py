@@ -2,8 +2,6 @@ import logging
 import re
 from datetime import UTC, datetime
 
-import httpx
-
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
@@ -372,11 +370,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # apply to their keys.
     if team_id and from_claims:
         try:
-            await client.add_team_member(team_id, user_id, role="user")
-        except httpx.HTTPStatusError as e:
-            text = (e.response.text if e.response is not None else "").lower()
-            if not (e.response is not None and e.response.status_code == 400 and "already" in text):
-                raise _upstream_error("team_member_add", e)
+            await client.ensure_team_member(team_id, user_id)
         except Exception as e:
             raise _upstream_error("team_member_add", e)
 
