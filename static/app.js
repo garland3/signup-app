@@ -49,9 +49,8 @@ async function loadConfig() {
 // TEAM_LABEL: the deployment's word for a team ("Project", say), as written
 // and its plural, both from /api/config.
 function teamTerm(plural) {
-    return plural
-        ? (appConfig.team_label_plural || "Teams")
-        : (appConfig.team_label || "Team");
+    var label = appConfig.team_label || "Team";
+    return plural ? (appConfig.team_label_plural || label + "s") : label;
 }
 
 // The label within a sentence: lower case if only its first letter is a

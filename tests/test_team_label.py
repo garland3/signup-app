@@ -3,15 +3,18 @@ import pytest
 import respx
 from httpx import ASGITransport, AsyncClient, Response
 
+from app.core import team_claims
 from tests.conftest import create_test_app
 from tests.test_oidc import _mock_provider
 from tests.test_team_claims import (
     GROUPS,
     ORIGIN,
+    OVERAGE,
     TOKEN_URL,
     Provider,
     _app,
     _claims_settings,
+    _key,
     _litellm,
     _sign_in,
 )
@@ -102,3 +105,32 @@ async def test_join_messages_use_the_label(project_app):
         member = await c.post("/api/teams/join", json={"team_id": "team-alpha"}, headers=AUTH)
     assert (unavailable.status_code, unavailable.json()["detail"]) == (403, "Project not available to join")
     assert (member.status_code, member.json()["detail"]) == (409, "You are already a member of this project.")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_other_claims_messages_use_the_label(monkeypatch):
+    _mock_provider()
+    _litellm()
+    _key("t-alpha")
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    app = _app(_claims_settings(TEAM_LABEL="Project"))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.groups = ["project-general"]  # taken out of project-alpha
+        left = await c.patch("/api/keys/hashed-1", json={"max_budget": 100}, headers=ORIGIN)
+        provider.groups, provider.extra = None, OVERAGE  # too many groups to list
+        overage = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert left.status_code == 403 and left.json()["detail"].startswith("You're no longer in this key's project,")
+    assert overage.status_code == 403 and "so your projects can't be checked" in overage.json()["detail"]
+
+    # Without a refresh token, groups older than the sign-in window.
+    provider = Provider(GROUPS, refresh_token=None)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        later = team_claims._now() + 400
+        monkeypatch.setattr(team_claims, "_now", lambda: later)
+        stale = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert (stale.status_code, stale.json()["detail"]) == (401, "Sign in again to confirm your projects")
