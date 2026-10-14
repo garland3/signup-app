@@ -2,6 +2,11 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings
 
+# Key metadata the app writes itself (the duration shown in the UI, and
+# Delete's marker): users' metadata can't set it, and REQUIRED_KEY_METADATA
+# can't ask for it.
+RESERVED_KEY_METADATA = ("duration", "deleted_at")
+
 
 class Settings(BaseSettings):
     # Core
@@ -91,6 +96,13 @@ class Settings(BaseSettings):
 
     # Key policy
     MAX_ACTIVE_KEYS_PER_USER: int | None = None
+    # Longest duration a key may be given, as a LiteLLM duration (e.g. "90d",
+    # "3mo"; a month counts as 30 days). When set, a key created without a duration gets this one, and a
+    # create or update asking for a longer one is rejected. It caps each
+    # period, not a key's total life: an update with a duration starts a new
+    # period, so an owner can renew a key (README). Empty = no limit (keys
+    # without a duration never expire).
+    MAX_KEY_DURATION: str = ""
     # Comma-separated list of required metadata field names per key
     # e.g. "project,task_number"
     REQUIRED_KEY_METADATA: str = ""

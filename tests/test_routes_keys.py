@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import respx
 from httpx import AsyncClient, ASGITransport, Response
@@ -902,7 +904,10 @@ async def test_create_key_accepts_valid_duration(app, duration):
     assert r.status_code == 201, f"expected 201 for duration={duration!r}"
     import json
     sent = json.loads(generate_route.calls[0].request.content)
-    assert sent["duration"] == duration
+    # Months go to LiteLLM as days (a month is 30 days); the entered value is kept for display.
+    expected = {"1mo": "30d", "12mo": "360d"}.get(duration, duration)
+    assert sent["duration"] == expected
+    assert sent["metadata"]["duration"] == duration
 
 
 @pytest.mark.asyncio
@@ -1109,3 +1114,359 @@ async def test_create_key_fails_closed_on_team_lookup_outage():
     # A membership-lookup outage must block creation, never fall back to an
     # unscoped key.
     assert r.status_code == 502
+
+
+@pytest.fixture
+def max_duration():
+    """Set MAX_KEY_DURATION for one test, restoring it afterwards."""
+    from app.core.config import get_settings
+
+    s = get_settings()
+    original = s.MAX_KEY_DURATION
+
+    def _set(value):
+        s.MAX_KEY_DURATION = value
+
+    yield _set
+    s.MAX_KEY_DURATION = original
+
+
+def _mock_generate():
+    return respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={
+            "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",
+            "token_id": "tok_cap",
+            "key_alias": "alice@example.com-CapKey",
+            "user_id": "alice@example.com",
+            "created_at": "2026-03-09T00:00:00Z",
+        })
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_without_duration_gets_max(app, max_duration):
+    """With MAX_KEY_DURATION, a key created without a duration gets it."""
+    max_duration("90d")
+    mock_ensure_user()
+    generate_route = _mock_generate()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "CapKey"}, headers=AUTH)
+
+    assert r.status_code == 201
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["duration"] == "90d"
+    assert sent["metadata"]["duration"] == "90d"
+
+
+@pytest.mark.parametrize("duration", ["30d", "90d", "2mo", "12h", "1s"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_within_max_duration(app, max_duration, duration):
+    max_duration("90d")
+    mock_ensure_user()
+    generate_route = _mock_generate()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "CapKey", "duration": duration}, headers=AUTH)
+
+    assert r.status_code == 201, f"expected 201 for duration={duration!r}"
+    import json
+    sent = json.loads(generate_route.calls[0].request.content)["duration"]
+    assert sent == {"2mo": "60d"}.get(duration, duration)
+
+
+@pytest.mark.parametrize("duration", ["91d", "4mo", "3000h"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_over_max_duration_rejected(app, max_duration, duration):
+    """A longer duration than MAX_KEY_DURATION is refused before any upstream call."""
+    max_duration("90d")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "CapKey", "duration": duration}, headers=AUTH)
+
+    assert r.status_code == 400, f"expected 400 for duration={duration!r}"
+    assert "90d" in r.json()["detail"]
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_over_max_duration_rejected(app, max_duration):
+    """PATCH can't extend a key past MAX_KEY_DURATION either."""
+    max_duration("30d")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "31d"}, headers=AUTH)
+
+    assert r.status_code == 400
+    assert len(respx.calls) == 0
+
+
+def _mock_key_update():
+    """An owned key (key/info) and key/update, which echoes the request."""
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", "blocked": False,
+            "created_at": "2025-01-01T00:00:00Z",  # long ago: renewal isn't bounded by it
+        })
+    )
+    return respx.post(f"{LITELLM}/key/update").mock(
+        side_effect=lambda request: Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", "blocked": False, "spend": 0,
+            **json.loads(request.content),
+        })
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_within_max_duration_renews_it(app, max_duration):
+    """A PATCH within the limit sends the duration as given: a new period from
+    now, however old the key (the cap is per period, README)."""
+    max_duration("30d")
+    update = _mock_key_update()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert sent["duration"] == "30d" and sent["metadata"]["duration"] == "30d"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_without_duration_is_unaffected_by_the_limit(app, max_duration):
+    max_duration("30d")
+    update = _mock_key_update()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"max_budget": 5}, headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert "duration" not in sent and sent["max_budget"] == 5
+
+
+@pytest.mark.parametrize("duration", ["\u0669\u0660d", "\uff19\uff10d"])  # Arabic-Indic, fullwidth "90d"
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_ascii_digits_are_not_a_duration(app, duration):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "duration": duration}, headers=AUTH)
+    assert r.status_code == 400
+    assert len(respx.calls) == 0
+
+
+def test_startup_rejects_non_ascii_max_key_duration():
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(MAX_KEY_DURATION="\u0669\u0660d", FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
+    with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
+        _enforce_startup_safety(s)
+
+
+@pytest.mark.parametrize("duration", ["9" * 10 + "d", "9" * 5000 + "s"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_very_long_number_is_a_400_not_a_500(app, max_duration, duration):
+    max_duration("90d")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "duration": duration}, headers=AUTH)
+    assert r.status_code == 400
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.parametrize("limit, duration, allowed", [
+    ("1mo", "30d", True), ("1mo", "31d", False),   # a month is 30 days
+    ("90d", "3mo", True), ("90d", "4mo", False),
+    ("1d", "24h", True), ("1d", "25h", False),
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_month_counts_as_30_days(app, max_duration, limit, duration, allowed):
+    max_duration(limit)
+    mock_ensure_user()
+    _mock_generate()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "duration": duration}, headers=AUTH)
+    if allowed:
+        assert r.status_code == 201
+    else:
+        assert r.status_code == 400
+        assert r.json()["detail"] == f"Keys may last at most {limit}. Choose a shorter duration."
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_default_maximum_in_months_is_sent_as_days(app, max_duration):
+    max_duration("3mo")
+    mock_ensure_user()
+    generate_route = _mock_generate()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k"}, headers=AUTH)
+    assert r.status_code == 201
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["duration"] == "90d" and sent["metadata"]["duration"] == "3mo"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_renewing_in_months_is_sent_as_days(app, max_duration):
+    max_duration("90d")
+    update = _mock_key_update()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "2mo"}, headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert sent["duration"] == "60d" and sent["metadata"]["duration"] == "2mo"
+
+
+def test_durations_parse():
+    from app.core.durations import parse
+
+    assert parse("90d") == (90, "d") and parse("1mo") == (1, "mo")
+    assert parse("999999999s") == (999999999, "s")
+    for bad in ("0d", "1000000000s", "90 days", "1w", "-1d", "\u0669\u0660d", ""):
+        assert parse(bad) is None, bad
+
+
+def test_startup_rejects_a_too_long_max_key_duration():
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(MAX_KEY_DURATION="9" * 5000 + "d", FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
+    with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
+        _enforce_startup_safety(s)
+
+
+def test_within_counts_a_month_as_30_days():
+    from app.core.durations import for_litellm, within
+
+    assert within("1mo", "1mo") and within("30d", "1mo") and not within("31d", "1mo")
+    assert within("3mo", "90d") and not within("3mo", "89d")
+    assert within("24h", "1d") and not within("25h", "1d")
+    assert for_litellm("3mo") == "90d" and for_litellm("12h") == "12h"
+
+
+@pytest.mark.asyncio
+async def test_get_config_reports_max_key_duration(app, max_duration):
+    max_duration("90d")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/config", headers=AUTH)
+    assert r.json()["max_key_duration"] == "90d"
+
+
+def test_startup_rejects_malformed_max_key_duration():
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(
+        MAX_KEY_DURATION="90 days",
+        FEATURE_PROXY_SECRET_ENABLED=False,
+        ALLOW_INSECURE_STARTUP=True,
+    )
+    with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
+        _enforce_startup_safety(s)
+
+
+def _mock_owned_key(metadata, expires=None):
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", "metadata": metadata, "expires": expires,
+        })
+    )
+    return respx.post(f"{LITELLM}/key/update").mock(
+        side_effect=lambda request: Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", **json.loads(request.content),
+        })
+    )
+
+
+@pytest.mark.parametrize("metadata, expires", [
+    ({"duration": "0s", "deleted_at": "2026-01-01T00:00:00+00:00"}, "2026-01-01T00:00:00Z"),
+    ({"duration": "0s"}, "2026-01-01T00:00:00Z"),  # deleted before deleted_at existed
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_deleted_key_cant_be_renewed_or_changed(app, metadata, expires):
+    """Delete expires a key and keeps it listed; a new duration must not bring it back."""
+    update = _mock_owned_key(metadata, expires)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        renew = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+        rename = await c.patch("/api/keys/tok_abc123", json={"key_alias": "new"}, headers=AUTH)
+    assert renew.status_code == 400 and rename.status_code == 400
+    assert "deleted" in renew.json()["detail"]
+    assert not update.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_live_key_cant_be_locked_through_metadata(app):
+    """deleted_at and duration are the app's: a user writing them changes nothing,
+    and a live key whose metadata says "0s" isn't taken for deleted."""
+    update = _mock_owned_key({"duration": "0s"}, "2999-01-01T00:00:00Z")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        lock = await c.patch("/api/keys/tok_abc123", json={"metadata": {"deleted_at": "now", "duration": "0s", "project": "x"}}, headers=AUTH)
+        renew = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+    assert lock.status_code == 200 and renew.status_code == 200
+    written = json.loads(update.calls[0].request.content)["metadata"]
+    assert "deleted_at" not in written and written["project"] == "x"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_users_metadata_cant_set_the_apps_names_on_create(app):
+    mock_ensure_user()
+    generate_route = _mock_generate()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "metadata": {"deleted_at": "x", "duration": "0s"}}, headers=AUTH)
+    assert r.status_code == 201
+    sent = json.loads(generate_route.calls[0].request.content)["metadata"]
+    assert "deleted_at" not in sent and "duration" not in sent
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_marks_the_key_deleted(app):
+    update = _mock_owned_key({"project": "x"}, None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.delete("/api/keys/tok_abc123", headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert sent["duration"] == "0s" and sent["metadata"]["deleted_at"] and sent["metadata"]["project"] == "x"
+
+
+@pytest.mark.parametrize("duration, ok", [("36500d", True), ("36501d", False), ("1216mo", True), ("1217mo", False), ("999999999mo", False)])
+def test_durations_are_at_most_100_years(duration, ok):
+    from app.core.durations import parse
+
+    assert (parse(duration) is not None) == ok
+
+
+@pytest.mark.parametrize("metadata", [{"deleted_at": "2026-01-01T00:00:00+00:00"}, {"duration": "0s"}])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_marker_on_a_live_key_doesnt_make_it_deleted(app, metadata):
+    """A marker written some other way (before the names were reserved) on a key
+    that hasn't expired: it's not deleted, and can be changed."""
+    update = _mock_owned_key(metadata, "2999-01-01T00:00:00Z")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+    assert r.status_code == 200
+    assert update.called
+
+
+@pytest.mark.parametrize("required", ["duration", "project,deleted_at"])
+def test_startup_refuses_reserved_names_in_required_metadata(required):
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(REQUIRED_KEY_METADATA=required, FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
+    with pytest.raises(RuntimeError, match="REQUIRED_KEY_METADATA"):
+        _enforce_startup_safety(s)

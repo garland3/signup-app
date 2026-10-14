@@ -75,6 +75,24 @@ def _enforce_startup_safety(settings) -> None:
     ):
         problems.append("OAUTH_CLAIMS_SOURCE=id_token requires OAUTH_ISSUER")
 
+    from app.core.config import RESERVED_KEY_METADATA
+
+    reserved = sorted(set(settings.required_metadata_fields) & set(RESERVED_KEY_METADATA))
+    if reserved:
+        problems.append(
+            f"REQUIRED_KEY_METADATA lists {', '.join(reserved)}, which the app "
+            "writes itself and users can't set, so every key creation would fail"
+        )
+
+    if settings.MAX_KEY_DURATION:
+        from app.core import durations
+
+        if durations.parse(settings.MAX_KEY_DURATION) is None:
+            problems.append(
+                f"MAX_KEY_DURATION={settings.MAX_KEY_DURATION!r} is not a "
+                "duration such as 90d or 3mo (units: s, m, h, d, mo)"
+            )
+
     if settings.AUTH_MODE == "oauth" and not settings.SESSION_SECRET:
         problems.append("SESSION_SECRET must be set when AUTH_MODE=oauth")
 

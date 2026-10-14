@@ -1,11 +1,13 @@
 import logging
 import re
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
 from app.core.audit import audit
-from app.core.config import get_settings
+from app.core import durations
+from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
 from app.core.rate_limit import limiter
 
@@ -119,15 +121,30 @@ def _is_expired(expires: str | None) -> bool:
 _NAME_SANITIZE_RE = re.compile(r"[^A-Za-z0-9-]+")
 _COLLAPSE_DASH_RE = re.compile(r"-+")
 
-# LiteLLM duration format: a positive integer followed by a unit suffix.
-# Supported units (per LiteLLM docs): s, m, h, d, mo. No spaces, no spelled-
-# out words ("1 day"), no unsupported units (w, y).
-_DURATION_RE = re.compile(r"^(\d+)(s|m|h|d|mo)$")
+# Durations ("30d", "1mo"): app/core/durations.py, shared with the startup check.
 _DURATION_HELP = (
     "Invalid duration. Use a positive integer followed by a unit: "
-    "s (seconds), m (minutes), h (hours), d (days), or mo (months). "
-    "Example: 30d, 1mo."
+    "s (seconds), m (minutes), h (hours), d (days), or mo (months), "
+    "up to 100 years. Example: 30d, 1mo."
 )
+
+
+
+def _user_metadata(metadata: dict | None) -> dict:
+    """User-supplied metadata without the names the app reserves."""
+    return {k: v for k, v in (metadata or {}).items() if k not in RESERVED_KEY_METADATA}
+
+
+def _is_deleted(info: dict) -> bool:
+    """Whether Delete (a soft delete) was used on the key: Delete's marker
+    (deleted_at, or before it existed the duration "0s"), on a key that has
+    expired. Delete expires the key at once, so a deleted key is always both; a
+    live key with a marker written some other way (users' metadata, before
+    the app reserved these names) isn't taken for deleted."""
+    meta = info.get("metadata") or {}
+    if not isinstance(meta, dict) or not _is_expired(info.get("expires")):
+        return False
+    return bool(meta.get("deleted_at")) or meta.get("duration") == "0s"
 
 
 def _validate_duration(value: str) -> None:
@@ -137,9 +154,27 @@ def _validate_duration(value: str) -> None:
     delete that uses ``"0s"``) bypass this by calling the LiteLLM client
     directly; this guard only runs on user-supplied values.
     """
-    match = _DURATION_RE.fullmatch(value)
-    if not match or int(match.group(1)) <= 0:
+    if durations.parse(value) is None:
         raise HTTPException(status_code=400, detail=_DURATION_HELP)
+
+
+def _capped_duration(duration: str | None) -> str | None:
+    """Apply MAX_KEY_DURATION to a user-supplied (already validated) duration.
+
+    No limit configured: unchanged. No duration given: the limit. Longer
+    than the limit: HTTP 400.
+    """
+    limit = get_settings().MAX_KEY_DURATION
+    if not limit:
+        return duration
+    if duration is None:
+        return limit
+    if not durations.within(duration, limit):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Keys may last at most {limit}. Choose a shorter duration.",
+        )
+    return duration
 
 
 def _sanitize_key_name(name: str) -> str:
@@ -220,6 +255,7 @@ async def get_config():
         "app_name": s.APP_NAME,
         "required_metadata": s.required_metadata_fields,
         "max_active_keys": s.MAX_ACTIVE_KEYS_PER_USER,
+        "max_key_duration": s.MAX_KEY_DURATION or None,
         "nav_links": s.nav_links,
         "show_spend": s.SHOW_SPEND_COLUMN,
         "show_budget": s.SHOW_BUDGET_COLUMN,
@@ -255,10 +291,12 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     if body.duration:
         _validate_duration(body.duration)
+    # A key without a duration gets MAX_KEY_DURATION, if one is set.
+    duration = _capped_duration(body.duration or None)
 
     # Validate required metadata fields
     required = settings.required_metadata_fields
-    metadata = dict(body.metadata or {})
+    metadata = _user_metadata(body.metadata)
     missing = [f for f in required if not str(metadata.get(f, "")).strip()]
     if missing:
         raise HTTPException(
@@ -316,8 +354,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
         raise _upstream_error("ensure_user", e)
 
     # Persist duration in metadata so we can show it in the UI
-    if body.duration:
-        metadata["duration"] = body.duration
+    if duration:
+        metadata["duration"] = duration
 
     kwargs = {
         "user_id": user_id,
@@ -326,8 +364,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
     }
     if team_id:
         kwargs["team_id"] = team_id
-    if body.duration:
-        kwargs["duration"] = body.duration
+    if duration:
+        kwargs["duration"] = durations.for_litellm(duration)  # months as days
     if body.models:
         kwargs["models"] = body.models
     if body.max_budget is not None:
@@ -367,7 +405,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
         key_alias=key_name,
         models=body.models or [],
         max_budget=body.max_budget,
-        duration=body.duration,
+        duration=duration,
     )
     return _format_key_response(result, include_full_key=full_key)
 
@@ -408,8 +446,17 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     # we don't pay an extra round-trip on bad input.
     if body.duration is not None:
         _validate_duration(body.duration)
+        _capped_duration(body.duration)
 
     info = await _verify_key_ownership(client, token, user_id)
+    # Delete (below) is a soft delete: the key expires at once and stays listed.
+    # A new duration would bring it back, so a deleted key can't be changed:
+    # Delete means deleted.
+    if _is_deleted(info):
+        raise HTTPException(
+            status_code=400,
+            detail="This key was deleted, so it can't be changed. Create a new key instead.",
+        )
 
     kwargs = {}
     if body.key_alias is not None:
@@ -431,18 +478,18 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     if body.tpm_limit is not None:
         kwargs["tpm_limit"] = body.tpm_limit
     if body.duration is not None:
-        kwargs["duration"] = body.duration
+        kwargs["duration"] = durations.for_litellm(body.duration)  # months as days
         # Update metadata so we keep the duration visible in the UI
         existing_meta = info.get("metadata") or {}
         if not isinstance(existing_meta, dict):
             existing_meta = {}
-        merged = {**existing_meta, **(body.metadata or {}), "duration": body.duration}
+        merged = {**existing_meta, **_user_metadata(body.metadata), "duration": body.duration}
         kwargs["metadata"] = merged
     elif body.metadata is not None:
         existing_meta = info.get("metadata") or {}
         if not isinstance(existing_meta, dict):
             existing_meta = {}
-        kwargs["metadata"] = {**existing_meta, **body.metadata}
+        kwargs["metadata"] = {**existing_meta, **_user_metadata(body.metadata)}
 
     try:
         result = await client.update_key(key=token, **kwargs)
@@ -473,7 +520,8 @@ async def delete_key(token: str, request: Request):
     existing_meta = info.get("metadata") or {}
     if not isinstance(existing_meta, dict):
         existing_meta = {}
-    merged_meta = {**existing_meta, "duration": "0s"}
+    merged_meta = {**existing_meta, "duration": "0s",
+                   "deleted_at": datetime.now(UTC).isoformat(timespec="seconds")}
 
     try:
         await client.update_key(
