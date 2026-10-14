@@ -269,7 +269,7 @@ are skipped and key revocation is checked by authentication only.
 
 Exit status: `0` all checks passed, `1` a check failed, `2` inconclusive
 (for example a network or upstream error), `3` cleanup failed (takes
-precedence over `1` and `2`), `130`/`143` interrupted. If cleanup fails, the script prints each leftover probe
+precedence over `1` and `2`), `130`/`143` interrupted (kept even if cleanup then fails; the leftover list is still printed). If cleanup fails, the script prints each leftover probe
 resource and the admin call that removes it.
 
 ### Rollout procedure

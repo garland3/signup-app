@@ -23,7 +23,8 @@
 # Exit status: 0 all checks passed, 1 a check failed, 2 a check was
 # inconclusive (for example a network or upstream error), 3 cleanup failed
 # (residual probe resources are listed; takes precedence over 1 and 2),
-# 130/143 interrupted/terminated.
+# 130/143 interrupted/terminated (kept even if cleanup then fails: check the
+# output for "Residual probe resources").
 #
 # See docs/2026-10-08-entra-access-packages-scim-design.md for context.
 #
@@ -292,7 +293,8 @@ admin_get /team/list --data-urlencode "user_id=$USER_ID"
 in_team=""
 field in_team "any(t.get('team_id')=='$LOCKED' for t in (d if isinstance(d,list) else d.get('teams',[])))"
 if [ "$HTTP_CODE" = 200 ] && [ "$in_team" = True ]; then pass "GET /team/list?user_id= shows the membership"
-else fail "GET /team/list?user_id= does not show the membership (HTTP $HTTP_CODE)"; fi
+elif [ "$HTTP_CODE" = 200 ]; then fail "GET /team/list?user_id= does not show the membership"
+else problem "GET /team/list?user_id="; fi
 
 admin_post /team/update "{\"team_id\":\"$LOCKED\",\"team_alias\":\"$LOCKED-renamed\"}"
 if [ "$HTTP_CODE" = 200 ]; then pass "POST /team/update (rename)"
@@ -377,7 +379,7 @@ if [ -n "$REVOKE_KEY" ]; then
         *) inconclusive "revocation check: $RESULT" ;;
       esac
     else
-      fail "POST /team/member_delete (HTTP $HTTP_CODE: $(errmsg))"
+      problem "POST /team/member_delete"
     fi
   else
     inconclusive "key not accepted before removal ($RESULT); revocation not tested"

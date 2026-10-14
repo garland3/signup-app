@@ -21,8 +21,9 @@ In practice: users request access to a team in the My Access portal, an
 approver signs off, Entra adds them to a group, and Entra's provisioning
 service pushes that membership to the bridge, which adds them to the matching
 LiteLLM team. Key creation works as it does today. When access expires or is
-revoked, the bridge removes the team membership **and blocks that user's keys
-for the team** in the same step.
+revoked, the bridge removes the team membership, and LiteLLM **deletes that
+user's keys for the team** in the same step. `/key/block` is only a fallback
+the bridge triggers if a key still works after the removal.
 
 ![Architecture](images/entra-access-packages-scim-architecture.png)
 
@@ -65,7 +66,7 @@ and an audit log. SCIM keeps LiteLLM in sync automatically.
 | Entra security group (one per team) | The membership that gets provisioned | No (Entra) |
 | Entra enterprise app with provisioning | SCIM client. Pushes users, groups, and memberships | No (Entra) |
 | Microsoft Entra provisioning agent (optional) | Lets the cloud provisioning service reach an internal-only endpoint | No (Entra) |
-| **SCIM bridge `/scim/v2` (new, this repo)** | SCIM 2.0 server. Translates SCIM changes into LiteLLM admin API calls; blocks keys on removal | **Yes** |
+| **SCIM bridge `/scim/v2` (new, this repo)** | SCIM 2.0 server. Translates SCIM changes into LiteLLM admin API calls; removing a member deletes their team keys (`/key/block` only as fallback) | **Yes** |
 | LiteLLM proxy | Users, teams, keys, model access, budgets | **Yes** (OSS edition) |
 | Signup App (this repo) | Key creation, gated on team membership. Points users without a team to My Access | **Yes** |
 
@@ -174,10 +175,10 @@ and needs no database:
 
 | Entra | SCIM | Bridge / LiteLLM | Notes |
 |---|---|---|---|
-| User | `User.userName` | LiteLLM `user_id` | **Must equal the identity this app sees** (the email in `X-User-Email` / OIDC claim). Entra maps `userName` from `userPrincipalName` by default; change it to `mail` if UPN and email differ. |
+| User | `User.userName` | LiteLLM `user_id` | **Must equal the user ID this app uses**, and should be immutable: run the app with `OAUTH_USER_ID_FIELD=oid` (PR #45) and map `userName` from Entra's `objectId`. Mapping from `mail` or `userPrincipalName` is a fallback for deployments that key users by email; those change on renames and can be reused. |
 | User | `User.id` (assigned by the bridge) | same value as `user_id` | Stable, no lookup table |
 | User | `User.externalId` (Entra object ID) | stored in LiteLLM user `metadata` | Lets the bridge answer Entra's lookups |
-| User disabled | `active: false` | block all the user's keys | |
+| User disabled | `active: false` | remove the user from every team (LiteLLM deletes their team keys) | |
 | Security group | `Group.id` (assigned by the bridge) | LiteLLM `team_id` | Stable, no lookup table |
 | Security group | `Group.displayName` | `team_alias` | Renames in Entra flow through |
 | Security group | `Group.externalId` | stored in team `metadata` | |
@@ -209,9 +210,15 @@ and needs no database:
    and the app stops creating LiteLLM users itself (users come from SCIM, so
    a mismatched identity shows up as "no team" rather than as a duplicate).
 3. **Reconciliation command.** Re-applies Entra's view (via the bridge's
-   own data in LiteLLM) and blocks orphaned team keys; run as a cron or
-   Kubernetes CronJob. Same code path as the SCIM removal handler.
-4. **Tests and mock.** Unit tests for each SCIM operation (including the
+   own data in LiteLLM): removes members Entra no longer lists, which deletes
+   their team keys, and blocks any team key that still works afterwards (the
+   fallback). Run as a cron or Kubernetes CronJob. Same code path as the SCIM
+   removal handler.
+4. **One identity helper.** A single function normalizes a user ID
+   (`STRIP_USER_DOMAIN`, lowercasing) and is shared by the auth middleware
+   and the bridge, so a SCIM `userName` and a signed-in user always resolve
+   to the same LiteLLM `user_id`.
+5. **Tests and mock.** Unit tests for each SCIM operation (including the
    Entra quirks) against `respx`, plus mock LiteLLM support for the new team
    endpoints. README section for setup.
 
@@ -248,8 +255,8 @@ No change to the rule that every key requires team membership.
 2. A non-gallery enterprise app with automatic provisioning:
    - Tenant URL `https://<app-host>/scim/v2`, Secret Token =
      `SCIM_BEARER_TOKEN`.
-   - Attribute mapping: `userName` set from whichever attribute equals the
-     app's identity (UPN or `mail`).
+   - Attribute mapping: `userName` from `objectId`, matching the app's
+     `OAUTH_USER_ID_FIELD=oid`; `externalId` from `objectId` as well.
    - Group provisioning enabled; scope "assigned users and groups"; assign the
      team groups to the app.
 3. One access package per team, in a catalog owned by the platform team:
@@ -267,13 +274,18 @@ No change to the rule that every key requires team membership.
   Self-join is off, and manual team-membership changes in LiteLLM are
   break-glass only (the next reconciliation may undo them).
 - **Identity match is the critical correctness point.** If `userName` doesn't
-  equal the app's identity, users won't see their teams.
+  equal the app's user ID, users won't see their teams. Bind both to Entra's
+  immutable object ID, not to `mail` or UPN, so a renamed or reused address
+  can't move someone's teams to another person.
 - **Revocation reaches keys**, not just membership: LiteLLM deletes the
   member's team keys on `/team/member_delete` (verified on 1.104.2; the
   verification script checks your version).
-- **The SCIM token is a privileged credential**: it can create teams and
-  change membership. Store it like the admin key, rotate it, and keep the
-  SCIM path off any public route unless the provisioning service needs it.
+- **The SCIM token is a privileged credential**, so limit what it can do:
+  the bridge only edits, deletes, or changes membership of teams it created
+  (marked `scim_managed` in team metadata), only adds and removes members with
+  role `user` (team admins stay managed in LiteLLM), and never creates keys.
+  Store the token like the admin key, rotate it, and keep the SCIM path off
+  any public route unless the provisioning service needs it.
 - **New teams must not default to all models.** LiteLLM treats an empty
   models list as "all models" (consistent with our inference test), so the
   bridge always sets `["no-default-models"]` on creation.
@@ -286,8 +298,9 @@ No change to the rule that every key requires team membership.
    enough.
 2. **Reachability.** Can Entra's cloud provisioning service reach this app,
    or is the on-prem provisioning agent needed?
-3. **Identity.** Is a user's UPN the same as the email the app receives (for
-   example `user@example.com`)?
+3. **Identity.** Can the app switch to `OAUTH_USER_ID_FIELD=oid` (PR #45)
+   so users are keyed by Entra's immutable object ID? Existing LiteLLM users
+   keyed by email would move to new users (see #45's README notes).
 4. **New team defaults.** Should a newly provisioned team stay locked
    (`no-default-models`) until an admin configures it, or should the bridge
    apply a default template (models list, budget) from config?
@@ -305,8 +318,8 @@ No change to the rule that every key requires team membership.
 |---|---|---|
 | 0. Decide | Answer the open questions | Decisions recorded in this doc |
 | 1. Build | SCIM bridge, membership-source setting, reconciliation, tests | Merged with CI green; passes Microsoft's SCIM validator |
-| 2. Staging | Entra test app provisioning to a staging deployment; one pilot access package | Grant and revoke (including key blocking) observed end to end |
-| 3. Pilot | One real team in production via access package | Pilot users get keys; revocation blocks keys |
+| 2. Staging | Entra test app provisioning to a staging deployment; one pilot access package | Grant and revoke observed end to end (a removed member's team keys are deleted) |
+| 3. Pilot | One real team in production via access package | Pilot users get keys; revocation deletes their team keys |
 | 4. Rollout | Packages for all teams; `TEAMS_MEMBERSHIP_SOURCE=scim`; self-join retired | All team membership flows through Entra |
 
 ## Alternatives considered
@@ -353,7 +366,8 @@ for the model tested, not for every model on a proxy. Without
 authentication only. Exit status: 0 passed, 1 a check failed, 2
 inconclusive (network or upstream error), 3 cleanup failed (residual probe
 resources are listed with the call that removes each; takes precedence over
-1 and 2), 130/143 interrupted.
+1 and 2), 130/143 interrupted (kept even if cleanup then fails; the
+leftover list is still printed).
 
 | Check | Result |
 |---|---|
