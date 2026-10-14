@@ -54,6 +54,23 @@ User -> Reverse Proxy -> Signup App -> LiteLLM Proxy
 
 The app holds a single admin key (`LITELLM_ADMIN_KEY`) to manage keys on behalf of users. Users are scoped by email via LiteLLM's `user_id` field.
 
+## Key lifetimes (`MAX_KEY_DURATION`)
+
+`MAX_KEY_DURATION` (e.g. `90d`; units `s`, `m`, `h`, `d`, `mo`) caps how long a key
+made or changed through the app may last. Leave it blank for no limit.
+
+- **A key with no duration** gets the maximum. Without a maximum, it never
+  expires.
+- **A longer duration is refused** (400), when a key is made (`POST /api/keys`)
+  and when its duration is changed (`PATCH /api/keys/{token}`). A month counts
+  as 28 to 31 days, so `31d` doesn't fit in `1mo`.
+- **The Create API Key dialog** shows the maximum under the duration field, says
+  what an empty field means, and checks the duration before sending it. The
+  server's check is the one that counts.
+- **Not retroactive:** keys made before the limit was set, or outside the app
+  (LiteLLM's admin UI or API), keep their expiry, including none. To bound them
+  too, set an expiry on them in LiteLLM, or delete them.
+
 ## Authentication
 
 Two modes, selected via `AUTH_MODE` in `.env`:

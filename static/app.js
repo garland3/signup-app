@@ -151,11 +151,41 @@ var DURATION_RE = /^(\d+)(s|m|h|d|mo)$/;
 var DURATION_HELP = "Invalid duration. Use a positive integer followed by " +
     "s, m, h, d, or mo (e.g. 30d, 1mo).";
 
+// Seconds per unit, shortest and longest (a month is 28 to 31 days), as in
+// app/routes/keys.py, which enforces MAX_KEY_DURATION; this only gives
+// earlier feedback.
+var UNIT_SECONDS = {s: [1, 1], m: [60, 60], h: [3600, 3600], d: [86400, 86400],
+                    mo: [28 * 86400, 31 * 86400]};
+
+// True if duration can never last longer than limit (both valid). Same unit:
+// compare counts; otherwise the longest duration must fit in the shortest limit.
+function withinDuration(duration, limit) {
+    var d = DURATION_RE.exec(duration), l = DURATION_RE.exec(limit);
+    if (!d || !l) return false;
+    if (d[2] === l[2]) return parseInt(d[1], 10) <= parseInt(l[1], 10);
+    return parseInt(d[1], 10) * UNIT_SECONDS[d[2]][1] <= parseInt(l[1], 10) * UNIT_SECONDS[l[2]][0];
+}
+
 function validateDuration(value) {
     if (!value) return null;
     var m = DURATION_RE.exec(value);
     if (!m || parseInt(m[1], 10) <= 0) return DURATION_HELP;
+    var max = appConfig.max_key_duration;
+    if (max && !withinDuration(value, max)) {
+        return "Keys may last at most " + max + ". Choose a shorter duration.";
+    }
     return null;
+}
+
+// The duration field's hint: the configured maximum, and what an empty field
+// means (the maximum, or with none set, a key that doesn't expire).
+function renderDurationHint() {
+    var hint = document.getElementById("key-duration-hint");
+    if (!hint) return;
+    var max = appConfig.max_key_duration;
+    hint.textContent = max
+        ? "At most " + max + ". Leave empty for " + max + "."
+        : "Leave empty for a key that doesn't expire.";
 }
 
 function showToast(message, type) {
@@ -322,6 +352,7 @@ function appendCell(tr, text) {
 function showCreateModal() {
     document.getElementById("key-name").value = "";
     document.getElementById("key-duration").value = "";
+    renderDurationHint();
     document.getElementById("key-budget").value = "";
     (appConfig.required_metadata || []).forEach(function(f) {
         var el = document.getElementById("meta-" + f);
