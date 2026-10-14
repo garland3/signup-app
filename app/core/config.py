@@ -91,10 +91,12 @@ class Settings(BaseSettings):
 
     # Key policy
     MAX_ACTIVE_KEYS_PER_USER: int | None = None
-    # Longest lifetime a key may have, as a LiteLLM duration (e.g. "90d",
-    # "3mo"). When set, a key created without a duration gets this one, and
-    # a create or update asking for a longer one is rejected, so no key
-    # lives forever. Empty = no limit (keys without a duration never expire).
+    # Longest duration a key may be given, as a LiteLLM duration (e.g. "90d",
+    # "3mo"; a month counts as 30 days). When set, a key created without a duration gets this one, and a
+    # create or update asking for a longer one is rejected. It caps each
+    # period, not a key's total life: an update with a duration starts a new
+    # period, so an owner can renew a key (README). Empty = no limit (keys
+    # without a duration never expire).
     MAX_KEY_DURATION: str = ""
     # Comma-separated list of required metadata field names per key
     # e.g. "project,task_number"

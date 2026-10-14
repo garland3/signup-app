@@ -904,7 +904,10 @@ async def test_create_key_accepts_valid_duration(app, duration):
     assert r.status_code == 201, f"expected 201 for duration={duration!r}"
     import json
     sent = json.loads(generate_route.calls[0].request.content)
-    assert sent["duration"] == duration
+    # Months go to LiteLLM as days (a month is 30 days); the entered value is kept for display.
+    expected = {"1mo": "30d", "12mo": "360d"}.get(duration, duration)
+    assert sent["duration"] == expected
+    assert sent["metadata"]["duration"] == duration
 
 
 @pytest.mark.asyncio
@@ -1171,7 +1174,8 @@ async def test_create_key_within_max_duration(app, max_duration, duration):
 
     assert r.status_code == 201, f"expected 201 for duration={duration!r}"
     import json
-    assert json.loads(generate_route.calls[0].request.content)["duration"] == duration
+    sent = json.loads(generate_route.calls[0].request.content)["duration"]
+    assert sent == {"2mo": "60d"}.get(duration, duration)
 
 
 @pytest.mark.parametrize("duration", ["91d", "4mo", "3000h"])
@@ -1265,16 +1269,87 @@ def test_startup_rejects_non_ascii_max_key_duration():
         _enforce_startup_safety(s)
 
 
-def test_within_compares_months_conservatively():
-    from app.routes.keys import _within
+@pytest.mark.parametrize("duration", ["9" * 10 + "d", "9" * 5000 + "s"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_very_long_number_is_a_400_not_a_500(app, max_duration, duration):
+    max_duration("90d")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "duration": duration}, headers=AUTH)
+    assert r.status_code == 400
+    assert len(respx.calls) == 0
 
-    assert _within("1mo", "1mo")
-    assert _within("28d", "1mo")
-    assert not _within("29d", "1mo")   # a month may be 28 days
-    assert _within("3mo", "93d")       # three months are at most 93 days
-    assert not _within("3mo", "90d")   # ... and may be more than 90
-    assert _within("24h", "1d")
-    assert not _within("25h", "1d")
+
+@pytest.mark.parametrize("limit, duration, allowed", [
+    ("1mo", "30d", True), ("1mo", "31d", False),   # a month is 30 days
+    ("90d", "3mo", True), ("90d", "4mo", False),
+    ("1d", "24h", True), ("1d", "25h", False),
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_month_counts_as_30_days(app, max_duration, limit, duration, allowed):
+    max_duration(limit)
+    mock_ensure_user()
+    _mock_generate()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "duration": duration}, headers=AUTH)
+    if allowed:
+        assert r.status_code == 201
+    else:
+        assert r.status_code == 400
+        assert r.json()["detail"] == f"Keys may last at most {limit}. Choose a shorter duration."
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_default_maximum_in_months_is_sent_as_days(app, max_duration):
+    max_duration("3mo")
+    mock_ensure_user()
+    generate_route = _mock_generate()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k"}, headers=AUTH)
+    assert r.status_code == 201
+    sent = json.loads(generate_route.calls[0].request.content)
+    assert sent["duration"] == "90d" and sent["metadata"]["duration"] == "3mo"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_renewing_in_months_is_sent_as_days(app, max_duration):
+    max_duration("90d")
+    update = _mock_key_update()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "2mo"}, headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert sent["duration"] == "60d" and sent["metadata"]["duration"] == "2mo"
+
+
+def test_durations_parse():
+    from app.core.durations import parse
+
+    assert parse("90d") == (90, "d") and parse("1mo") == (1, "mo")
+    assert parse("999999999s") == (999999999, "s")
+    for bad in ("0d", "1000000000s", "90 days", "1w", "-1d", "\u0669\u0660d", ""):
+        assert parse(bad) is None, bad
+
+
+def test_startup_rejects_a_too_long_max_key_duration():
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(MAX_KEY_DURATION="9" * 5000 + "d", FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
+    with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
+        _enforce_startup_safety(s)
+
+
+def test_within_counts_a_month_as_30_days():
+    from app.core.durations import for_litellm, within
+
+    assert within("1mo", "1mo") and within("30d", "1mo") and not within("31d", "1mo")
+    assert within("3mo", "90d") and not within("3mo", "89d")
+    assert within("24h", "1d") and not within("25h", "1d")
+    assert for_litellm("3mo") == "90d" and for_litellm("12h") == "12h"
 
 
 @pytest.mark.asyncio

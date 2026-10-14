@@ -11,6 +11,7 @@ var teamsEnabled = false;
 // True when the server couldn't load the user's teams (list is unknown, not
 // empty), so key creation is blocked rather than guessed.
 var teamsUnavailable = false;
+var configLoaded = false;  // /api/config answered (appConfig is then the server's)
 var appConfig = {
     app_name: "API Keys",
     required_metadata: [],
@@ -29,6 +30,7 @@ async function loadConfig() {
     var r = await fetch(API_BASE + "/config");
     if (!r.ok) return;
     appConfig = await r.json();
+    configLoaded = true;
     if (appConfig.show_spend == null) appConfig.show_spend = true;
     if (appConfig.show_budget == null) appConfig.show_budget = true;
     var title = appConfig.app_name || "API Keys";
@@ -147,23 +149,19 @@ function prettyLabel(field) {
 // Supported units: s (seconds), m (minutes), h (hours), d (days), mo (months).
 // Mirrors the server-side regex in app/routes/keys.py so invalid input is
 // rejected before we make a network round-trip.
-var DURATION_RE = /^(\d+)(s|m|h|d|mo)$/;
+var DURATION_RE = /^([0-9]{1,9})(s|m|h|d|mo)$/;
 var DURATION_HELP = "Invalid duration. Use a positive integer followed by " +
     "s, m, h, d, or mo (e.g. 30d, 1mo).";
 
-// Seconds per unit, shortest and longest (a month is 28 to 31 days), as in
-// app/routes/keys.py, which enforces MAX_KEY_DURATION; this only gives
-// earlier feedback.
-var UNIT_SECONDS = {s: [1, 1], m: [60, 60], h: [3600, 3600], d: [86400, 86400],
-                    mo: [28 * 86400, 31 * 86400]};
+// Seconds per unit, a month counting as 30 days, as in app/core/durations.py,
+// which enforces MAX_KEY_DURATION; this only gives earlier feedback.
+var UNIT_SECONDS = {s: 1, m: 60, h: 3600, d: 86400, mo: 30 * 86400};
 
-// True if duration can never last longer than limit (both valid). Same unit:
-// compare counts; otherwise the longest duration must fit in the shortest limit.
+// True if duration is no longer than limit (both valid).
 function withinDuration(duration, limit) {
     var d = DURATION_RE.exec(duration), l = DURATION_RE.exec(limit);
     if (!d || !l) return false;
-    if (d[2] === l[2]) return parseInt(d[1], 10) <= parseInt(l[1], 10);
-    return parseInt(d[1], 10) * UNIT_SECONDS[d[2]][1] <= parseInt(l[1], 10) * UNIT_SECONDS[l[2]][0];
+    return parseInt(d[1], 10) * UNIT_SECONDS[d[2]] <= parseInt(l[1], 10) * UNIT_SECONDS[l[2]];
 }
 
 function validateDuration(value) {
@@ -178,10 +176,15 @@ function validateDuration(value) {
 }
 
 // The duration field's hint: the configured maximum, and what an empty field
-// means (the maximum, or with none set, a key that doesn't expire).
+// means (the maximum, or with none set, a key that doesn't expire). Nothing
+// until /api/config has loaded: without it the maximum is unknown.
 function renderDurationHint() {
     var hint = document.getElementById("key-duration-hint");
     if (!hint) return;
+    if (!configLoaded) {
+        hint.textContent = "";
+        return;
+    }
     var max = appConfig.max_key_duration;
     hint.textContent = max
         ? "At most " + max + ". Leave empty for " + max + "."
