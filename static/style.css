@@ -11,10 +11,23 @@ body {
     line-height: 1.5;
 }
 
+/* As wide as the keys table needs (at least 900px, at most the window), so the
+   title, links, header and table share one width: a wider table (long key
+   names, more columns) widens the page instead of sticking out of it. */
 .container {
-    max-width: 900px;
+    width: fit-content;
+    min-width: min(900px, 100%);
+    max-width: 100%;
     margin: 40px auto;
     padding: 0 20px;
+}
+
+/* On a window narrower than the table, the table scrolls sideways in place.
+   The padding keeps the table's shadow from being clipped. */
+.table-scroll {
+    overflow-x: auto;
+    padding: 0 3px 3px;
+    margin: 0 -3px;
 }
 
 .app-title {
@@ -47,13 +60,27 @@ body {
     text-decoration: underline;
 }
 
+/* Three columns: the page tabs at the left, the user in the middle (centered
+   under the title, whatever the tabs' and Log out's widths), Log out at the
+   right. Narrow windows, where they don't fit in a row, wrap them centered. */
 header {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 12px;
     margin-bottom: 24px;
-    flex-wrap: wrap;
+}
+
+header .page-tabs { justify-self: start; }
+header #user-email { justify-self: center; }
+header .logout-form { justify-self: end; }
+
+@media (max-width: 520px) {
+    header {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
 }
 
 .logout-form {
