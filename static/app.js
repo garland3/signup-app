@@ -265,7 +265,7 @@ function renderKeys() {
     currentKeys.forEach(function(k) {
         var tr = document.createElement("tr");
         appendCell(tr, k.name);
-        if (teamsEnabled) appendCell(tr, teamLabel(k));
+        if (teamsEnabled) appendCell(tr, teamLabel(k)).className = "team-cell";
 
         var prefixCell = document.createElement("td");
         var prefixSpan = document.createElement("span");
@@ -317,6 +317,7 @@ function appendCell(tr, text) {
     var td = document.createElement("td");
     td.textContent = text == null ? "" : String(text);
     tr.appendChild(td);
+    return td;
 }
 
 function showCreateModal() {
