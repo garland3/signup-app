@@ -4,8 +4,8 @@
 #
 # Creates throwaway probe resources (a user, teams, and keys named
 # "probe-<random uuid>"), checks each call, and deletes only the resources
-# this run created, also when interrupted (Ctrl-C) or terminated. Needs curl
-# and python3. Runs with the LiteLLM admin key: point it at a staging proxy
+# this run created, also when interrupted (Ctrl-C) or terminated. Needs bash
+# 4 or newer, curl 7.55 or newer, and python3. Runs with the LiteLLM admin key: point it at a staging proxy
 # first.
 #
 # Usage:
@@ -86,21 +86,28 @@ shielded() { ( trap '' INT TERM; exec "$@" ); }
 # request METHOD PATH BEARER [curl args...] -> sets HTTP_CODE ("000" on a
 # transport failure); the response body is left in $BODY. Runs in the
 # current shell (never in $(...)), so callers can record what it created.
+# Secrets (the bearer token, request bodies that carry keys) are written to
+# files in $WORK with shell builtins and passed to curl as @file, so they
+# never appear in a process's command line.
 request() {
   local method=$1 path=$2 bearer=$3
   shift 3
   checkpoint
   : > "$BODY"
   : > "$WORK/status"
+  printf 'Authorization: Bearer %s\n' "$bearer" > "$WORK/auth.hdr"
   shielded curl -sS --connect-timeout 10 --max-time 60 -o "$BODY" -w '%{http_code}' \
-    -X "$method" "$B$path" -H "Authorization: Bearer $bearer" "$@" \
+    -X "$method" "$B$path" -H @"$WORK/auth.hdr" "$@" \
     > "$WORK/status" 2> "$WORK/curl.err"
   CURL_RC=$?
   HTTP_CODE=""
   IFS= read -r HTTP_CODE < "$WORK/status" || true
   [ -n "$HTTP_CODE" ] || HTTP_CODE=000
 }
-admin_post() { request POST "$1" "$LITELLM_ADMIN_KEY" -H "$JSON" -d "$2"; }
+admin_post() {
+  printf '%s' "$2" > "$WORK/req.json"
+  request POST "$1" "$LITELLM_ADMIN_KEY" -H "$JSON" --data-binary @"$WORK/req.json"
+}
 admin_get() { local p=$1; shift; request GET "$p" "$LITELLM_ADMIN_KEY" -G "$@"; }
 # field VAR EXPR -> sets VAR to EXPR evaluated on the last response body (d).
 field() {
@@ -207,7 +214,7 @@ verify_block() {
   if [ "$HTTP_CODE" != 200 ]; then problem "POST /key/block"; return; fi
   "$2" "$1"
   case "$RESULT" in
-    key_rejected) pass "POST /key/block revoked the key ($3 now gets HTTP 401)" ;;
+    key_rejected) pass "POST /key/block revoked the key ($3 now gets HTTP $HTTP_CODE)" ;;
     allowed) fail "POST /key/block returned 200 but the key is still accepted for $3" ;;
     *) inconclusive "key block check: $RESULT" ;;
   esac
@@ -225,7 +232,7 @@ delete_one() {
 cleanup() {
   local residual=() i k a
   echo "Cleanup (resources created by this run only):"
-  for i in "${!CREATED_KEY_ALIASES[@]}"; do
+  for i in ${CREATED_KEY_ALIASES[@]+"${!CREATED_KEY_ALIASES[@]}"}; do
     k=${CREATED_KEYS[$i]} a=${CREATED_KEY_ALIASES[$i]}
     if [ -n "$k" ]; then
       delete_one /key/delete "{\"keys\":[\"$k\"]}" "key alias $a"
@@ -233,11 +240,11 @@ cleanup() {
       delete_one /key/delete "{\"key_aliases\":[\"$a\"]}" "key alias $a"
     fi || residual+=("key with alias $a  (POST /key/delete {\"key_aliases\":[\"$a\"]})")
   done
-  for i in "${!CREATED_TEAMS[@]}"; do
+  for i in ${CREATED_TEAMS[@]+"${!CREATED_TEAMS[@]}"}; do
     delete_one /team/delete "{\"team_ids\":[\"${CREATED_TEAMS[$i]}\"]}" "team ${CREATED_TEAMS[$i]}" \
       || residual+=("team ${CREATED_TEAMS[$i]}  (POST /team/delete {\"team_ids\":[\"${CREATED_TEAMS[$i]}\"]})")
   done
-  for i in "${!CREATED_USERS[@]}"; do
+  for i in ${CREATED_USERS[@]+"${!CREATED_USERS[@]}"}; do
     delete_one /user/delete "{\"user_ids\":[\"${CREATED_USERS[$i]}\"]}" "user ${CREATED_USERS[$i]}" \
       || residual+=("user ${CREATED_USERS[$i]}  (POST /user/delete {\"user_ids\":[\"${CREATED_USERS[$i]}\"]})")
   done
@@ -291,7 +298,7 @@ if add_member "$LOCKED"; then pass "POST /team/member_add by user_id"; else fini
 
 admin_get /team/list --data-urlencode "user_id=$USER_ID"
 in_team=""
-field in_team "any(t.get('team_id')=='$LOCKED' for t in (d if isinstance(d,list) else d.get('teams',[])))"
+field in_team "any(t.get('team_id')=='$LOCKED' for t in (d if isinstance(d,list) else next((d[k] for k in ('teams','available_teams','results') if isinstance(d.get(k),list)),[])) if isinstance(t,dict))"
 if [ "$HTTP_CODE" = 200 ] && [ "$in_team" = True ]; then pass "GET /team/list?user_id= shows the membership"
 elif [ "$HTTP_CODE" = 200 ]; then fail "GET /team/list?user_id= does not show the membership"
 else problem "GET /team/list?user_id="; fi
@@ -325,7 +332,7 @@ else
   if [ "$BASELINE_OK" -eq 1 ] && [ -n "$LOCKED_KEY" ]; then
     infer "$LOCKED_KEY"
     case "$RESULT" in
-      model_denied) pass "models=[\"no-default-models\"] denies inference on $PROBE_MODEL (HTTP 401/403)" ;;
+      model_denied) pass "models=[\"no-default-models\"] denies inference on $PROBE_MODEL (HTTP $HTTP_CODE)" ;;
       allowed) fail "models=[\"no-default-models\"] did NOT deny inference on $PROBE_MODEL" ;;
       *) inconclusive "no-default-models check: $RESULT" ;;
     esac
@@ -372,7 +379,7 @@ if [ -n "$REVOKE_KEY" ]; then
       pass "POST /team/member_delete"
       $check "$REVOKE_KEY"
       case "$RESULT" in
-        key_rejected) pass "removing the member revoked their team key ($what now gets HTTP 401)" ;;
+        key_rejected) pass "removing the member revoked their team key ($what now gets HTTP $HTTP_CODE)" ;;
         allowed)
           info "the team key still works after member removal: the bridge must block keys itself"
           verify_block "$REVOKE_KEY" "$check" "$what" ;;

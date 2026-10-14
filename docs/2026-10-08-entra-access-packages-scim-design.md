@@ -158,8 +158,10 @@ and deletes the member's keys for that team in the same transaction (they
 are archived and audit-logged). Verified live: the key returned 401
 immediately after the call.
 
-A disabled user (`active: false`) is removed from all of their teams, which
-deletes all of their team keys. Because the bridge handles removal itself,
+A disabled user (`active: false`) is removed from every `scim_managed` team
+they belong to, which deletes their keys in those teams. Memberships in teams
+the bridge doesn't manage are left alone, consistent with the bridge's
+scoping; disabling sign-in in Entra stops new keys there. Because the bridge handles removal itself,
 keys stop working on the same cycle as the membership change. If a LiteLLM
 version ever stops deleting keys on member removal, the bridge falls back to
 `/key/block` on the user's keys for that team;
@@ -178,7 +180,7 @@ and needs no database:
 | User | `User.userName` | LiteLLM `user_id` | **Must equal the user ID this app uses**, and should be immutable: run the app with `OAUTH_USER_ID_FIELD=oid` (PR #45) and map `userName` from Entra's `objectId`. Mapping from `mail` or `userPrincipalName` is a fallback for deployments that key users by email; those change on renames and can be reused. |
 | User | `User.id` (assigned by the bridge) | same value as `user_id` | Stable, no lookup table |
 | User | `User.externalId` (Entra object ID) | stored in LiteLLM user `metadata` | Lets the bridge answer Entra's lookups |
-| User disabled | `active: false` | remove the user from every team (LiteLLM deletes their team keys) | |
+| User disabled | `active: false` | remove the user from every `scim_managed` team (LiteLLM deletes their keys in those teams) | Other teams are untouched |
 | Security group | `Group.id` (assigned by the bridge) | LiteLLM `team_id` | Stable, no lookup table. **Adopting an existing team:** a LiteLLM admin opts it in by setting `scim_managed: true` in the team's metadata, with `team_alias` equal to the Entra group name. Entra's first lookup (`filter=displayName eq "..."`) then returns that team's `team_id` and Entra uses it. A team with the same name that is not opted in is never returned or changed: Entra's create fails with 409 and shows in its provisioning logs. |
 | Security group | `Group.displayName` | `team_alias` | Renames in Entra flow through |
 | Security group | `Group.externalId` | stored in team `metadata` | |
@@ -308,6 +310,25 @@ No change to the rule that every key requires team membership.
 - **New teams must not default to all models.** LiteLLM treats an empty
   models list as "all models" (consistent with our inference test), so the
   bridge always sets `["no-default-models"]` on creation.
+
+## Before the build phase
+
+Not blockers for this draft, but each must be settled before the bridge is
+built:
+
+- **`scim_members` integrity.** Seed `scim_members` when a team is adopted
+  (from Entra's first full sync, not from LiteLLM's current members), treat
+  "already a member" as success, and serialize metadata writes per team so
+  concurrent updates can't drop entries.
+- **Reconciliation safety.** A dry-run mode that reports what it would
+  remove, and a removal threshold (for example more than 10% of a team's
+  members, or more than N users in one run) above which it stops and asks
+  for a human. Removal permanently deletes keys.
+- **Least privilege.** Find out whether open-source LiteLLM can issue a
+  route-restricted admin key limited to the user, team, and member endpoints;
+  until then the bridge holds the full `LITELLM_ADMIN_KEY`. Network-restrict
+  `/scim/v2` to the provisioning service (or the on-prem agent), and write
+  every SCIM change to the audit log.
 
 ## Open questions (to work through)
 
