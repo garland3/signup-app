@@ -18,18 +18,25 @@ body {
 }
 
 /* The Keys and Usage pages' width: the same on both, so switching between them
-   doesn't move anything, and wide enough for the keys table (it wraps long key
-   names, and scrolls sideways in its box on a narrower window). */
+   doesn't move anything, and wide enough for the keys table, which wraps key
+   names at their dashes. A name with a long unbroken part, or a narrower window,
+   makes the table scroll sideways in its box (.table-scroll). */
 .container-wide {
     max-width: 1180px;
 }
 
 /* On a window narrower than the table, the table scrolls sideways in place.
-   The padding keeps the table's shadow from being clipped. */
+   The padding keeps the table's shadow from being clipped. It can take the
+   keyboard focus (index.html), so it can be scrolled without a mouse. */
 .table-scroll {
     overflow-x: auto;
     padding: 0 3px 3px;
     margin: 0 -3px;
+}
+
+.table-scroll:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
 }
 
 .app-title {
@@ -85,7 +92,7 @@ header {
 .keys-header #user-email { justify-self: center; min-width: 0; overflow-wrap: anywhere; text-align: center; }
 .keys-header .logout-form { justify-self: end; }
 
-@media (max-width: 520px) {
+@media (max-width: 32.5em) {  /* 520px at the default text size; follows text zoom */
     .keys-header {
         display: flex;
         justify-content: center;
