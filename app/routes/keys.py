@@ -261,6 +261,8 @@ async def get_config():
         "show_spend": s.SHOW_SPEND_COLUMN,
         "show_budget": s.SHOW_BUDGET_COLUMN,
         "show_project_task_breakdown": s.SHOW_PROJECT_TASK_BREAKDOWN,
+        "team_label": s.team_label(),
+        "team_label_plural": s.team_label(plural=True),
     }
 
 
@@ -338,9 +340,10 @@ async def create_key(body: CreateKeyRequest, request: Request):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "A team is required. Your teams come from your sign-in; ask your administrators if you have none."
+                    f"Keys belong to {settings.team_word(True)}, and yours come from your sign-in;"
+                    " ask your administrators if you have none."
                     if from_claims
-                    else "A team is required. Join a team before creating a key."
+                    else f"Keys belong to {settings.team_word(True)}: join one before creating a key."
                 ),
             )
         if from_claims:
@@ -355,7 +358,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
             raise _upstream_error("list_teams", e)
         if body.team_id not in {t.get("team_id") for t in teams}:
             raise HTTPException(
-                status_code=400, detail="Invalid team for this user"
+                status_code=400, detail=f"Invalid {settings.team_word()} for this user"
             )
         team_id = body.team_id
 
@@ -484,8 +487,8 @@ async def _require_current_team(request: Request, client: LiteLLMClient, info: d
     if not info.get("team_id") or info["team_id"] not in {t["team_id"] for t in teams}:
         raise HTTPException(
             status_code=403,
-            detail="You're no longer in this key's team, so it can't be changed or unblocked. "
-            "You can still block or delete it.",
+            detail=f"You're no longer in this key's {s.team_word()}, so it can't be changed or "
+            "unblocked. You can still block or delete it.",
         )
 
 
