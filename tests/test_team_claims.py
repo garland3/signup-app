@@ -683,19 +683,26 @@ async def test_a_cancelled_request_doesnt_cancel_the_shared_refresh(monkeypatch)
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_a_group_naming_one_teams_alias_and_anothers_id_means_the_alias():
+@pytest.mark.parametrize(
+    "teams",
+    [
+        # one team's alias is another's ID
+        [{"team_id": "project-alpha", "team_alias": "legacy"}, {"team_id": "t-real", "team_alias": "project-alpha"}],
+        # two teams share an alias
+        [{"team_id": "t-first", "team_alias": "project-alpha"}, {"team_id": "t-second", "team_alias": "project-alpha"}],
+    ],
+)
+async def test_a_group_name_that_could_mean_two_teams_means_none(teams, caplog):
     _mock_provider()
-    teams = [
-        {"team_id": "project-alpha", "team_alias": "legacy"},
-        {"team_id": "t-real", "team_alias": "project-alpha"},
-    ]
     respx.get(f"{LITELLM}/team/list").mock(return_value=Response(200, json=teams))
     provider = Provider(["project-alpha"])
     respx.post(TOKEN_URL).mock(side_effect=provider)
     async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
         await _sign_in(c, provider)
-        me = (await c.get("/api/me")).json()
-    assert [t["team_id"] for t in me["teams"]] == ["t-real"]
+        with caplog.at_level("WARNING", logger="app.core.team_claims"):
+            me = (await c.get("/api/me")).json()
+    assert me["teams"] == []
+    assert "Group name project-alpha could mean teams" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -749,21 +756,16 @@ async def test_key_changes_that_re_read_groups_are_rate_limited():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_an_alias_two_teams_share_means_the_first_and_is_logged(caplog):
+async def test_a_team_whose_alias_is_its_own_id_is_not_ambiguous():
     _mock_provider()
-    teams = [
-        {"team_id": "t-first", "team_alias": "project-alpha"},
-        {"team_id": "t-second", "team_alias": "project-alpha"},
-    ]
+    teams = [{"team_id": "project-alpha", "team_alias": "project-alpha"}]
     respx.get(f"{LITELLM}/team/list").mock(return_value=Response(200, json=teams))
     provider = Provider(["project-alpha"])
     respx.post(TOKEN_URL).mock(side_effect=provider)
     async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
         await _sign_in(c, provider)
-        with caplog.at_level("WARNING", logger="app.core.team_claims"):
-            me = (await c.get("/api/me")).json()
-    assert [t["team_id"] for t in me["teams"]] == ["t-first"]
-    assert "share the alias project-alpha" in caplog.text
+        me = (await c.get("/api/me")).json()
+    assert me["teams"] == [{"team_id": "project-alpha", "team_alias": "project-alpha"}]
 
 
 def _slow_refresh(provider, started: asyncio.Event):
@@ -868,3 +870,50 @@ async def test_a_team_matched_by_id_reports_its_own_alias():
         await _sign_in(c, provider)
         me = (await c.get("/api/me")).json()
     assert me["teams"] == [{"team_id": "project-alpha", "team_alias": "Alpha"}]
+
+
+
+@pytest.mark.parametrize("value", [7, True, {"project-alpha": 1}, None])
+def test_a_groups_claim_that_isnt_a_list_or_string_is_no_groups(value):
+    assert team_claims.groups_from_claims({"groups": value}, _claims_settings()) == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refused_refresh_after_a_newer_sign_in_keeps_that_sign_in(audited):
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    started = asyncio.Event()
+    endpoint, release = _slow_refresh(provider, started)
+    respx.post(TOKEN_URL).mock(side_effect=endpoint)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        key = asyncio.create_task(c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN))
+        await started.wait()
+        provider.refresh_token = "rt-new"
+        await _sign_in(c, provider)  # signs in again meanwhile
+        provider.refresh_status = 400  # and the old token's refresh is refused
+        release.set()
+        r = await key
+        me = await c.get("/api/me")
+    assert r.status_code == 401 and "changed" in r.json()["detail"]
+    assert me.status_code == 200  # the newer sign-in's session is intact
+    assert "oauth_refresh_refused" not in [e for e, _ in audited]
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_groups_overage_without_a_refresh_token_is_refused_and_audited(audited):
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(None, refresh_token=None)  # no refresh token: the sign-in's groups count
+    provider.extra = OVERAGE
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert r.status_code == 403
+    assert "team_claims_overage" in [e for e, _ in audited]
+    assert not generate.called

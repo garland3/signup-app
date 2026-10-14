@@ -99,41 +99,45 @@ def store_groups(session: dict, claims: dict, settings: Settings) -> list[str]:
 
 
 def groups_from_claims(claims: dict, settings: Settings) -> list[str]:
-    """The claim's group names that have the team prefix (a list or one string)."""
-    value = claims.get(settings.GROUPS_FIELD) or []
+    """The claim's group names that have the team prefix (a list or one string;
+    anything else counts as no groups)."""
+    value = claims.get(settings.GROUPS_FIELD)
     if isinstance(value, str):
         value = [value]
+    elif not isinstance(value, list):
+        value = []
     prefix = settings.TEAM_GROUP_PREFIX
     return sorted({g for g in value if isinstance(g, str) and g.startswith(prefix)})
 
 
 async def _teams_by_name(client: LiteLLMClient, *, refresh: bool = False) -> dict[str, dict]:
-    """Teams by name: their team_alias, else their team_id. A name that is one
-    team's alias and another's ID means the alias, and an alias two teams share
-    means the first LiteLLM lists (both logged)."""
+    """Teams by name: their team_alias or their team_id.
+
+    A name that could mean more than one team (an alias two teams share, or one
+    team's alias and another's ID) means none, and is logged: whoever can set a
+    team's alias mustn't be able to take another team's group members.
+    """
     global _teams_cache
     now = time.monotonic()
     if refresh or _teams_cache is None or now - _teams_cache[0] > TEAMS_TTL_SECONDS:
-        aliases: dict[str, dict] = {}
-        ids: dict[str, dict] = {}
+        candidates: dict[str, dict[str, dict]] = {}  # name -> {team_id: team}
         for t in await client.list_all_teams():
-            alias, team_id = t.get("team_alias"), t.get("team_id")
-            if isinstance(alias, str) and alias:
-                if alias in aliases:
-                    logger.warning(
-                        "Teams %s and %s share the alias %s; using %s",
-                        aliases[alias].get("team_id"), team_id, alias, aliases[alias].get("team_id"),
-                    )
-                aliases.setdefault(alias, t)
-            if isinstance(team_id, str) and team_id:
-                ids.setdefault(team_id, t)
-        for name in aliases.keys() & ids.keys():
-            if aliases[name] is not ids[name]:
+            team_id = t.get("team_id")
+            if not (isinstance(team_id, str) and team_id):
+                continue
+            for name in {team_id, t.get("team_alias")}:
+                if isinstance(name, str) and name:
+                    candidates.setdefault(name, {})[team_id] = t
+        index = {}
+        for name, teams in candidates.items():
+            if len(teams) == 1:
+                index[name] = next(iter(teams.values()))
+            else:
                 logger.warning(
-                    "Group %s names team %s by alias and team %s by ID; using the alias",
-                    name, aliases[name].get("team_id"), name,
+                    "Group name %s could mean teams %s; it means none until that's resolved",
+                    name, ", ".join(sorted(teams)),
                 )
-        _teams_cache = (now, {**ids, **aliases})
+        _teams_cache = (now, index)
     return _teams_cache[1]
 
 
@@ -178,6 +182,7 @@ async def refresh_groups(request: Request) -> list[str]:
         age = _now() - float(session.get("groups_at") or 0)
         if age <= max(SIGN_IN_GRACE_SECONDS, s.TEAM_CLAIMS_MAX_AGE_SECONDS):
             if session.get("groups_overage"):
+                audit("team_claims_overage", user=session.get("user_email"))
                 raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
             return session_groups(request)
         audit("team_claims_stale", user=session.get("user_email"), age=int(age))
@@ -185,9 +190,12 @@ async def refresh_groups(request: Request) -> list[str]:
     try:
         tokens, claims = await _refresh_shared(refresh_token, s, session)
     except RefreshRefused:
+        if session.get("refresh_token") != refresh_token:
+            # A newer sign-in (or a logout) replaced the session meanwhile: the
+            # refused token was the old one, so the session hasn't ended.
+            raise HTTPException(status_code=401, detail="Your sign-in changed; sign in again")
         user = session.get("user_email")
-        if session.get("refresh_token") == refresh_token:  # not a newer sign-in's session
-            session.clear()
+        session.clear()
         audit("oauth_refresh_refused", user=user)
         raise HTTPException(status_code=401, detail="Your sign-in has ended; sign in again")
     # A sign-in or logout while the refresh ran replaced the session (the refresh

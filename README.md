@@ -314,7 +314,11 @@ OAUTH_SCOPES=openid email profile offline_access  # Entra ID: offline_access, fo
 - **A person's teams** are the groups in their sign-in claims that start with
   `TEAM_GROUP_PREFIX` and name a LiteLLM team, by `team_alias` or `team_id`
   (group `project-alpha` -> the team aliased `project-alpha`). Operators create
-  the teams; groups without a team are ignored.
+  the teams; groups without a team are ignored. A name that could mean two
+  teams (an alias two teams share, or one team's alias and another's ID) means
+  neither, and is logged, so a team admin who renames their team can't take
+  another team's group members, though the clash blocks that group until it's
+  resolved. Keep changes to aliases with the prefix to proxy administrators.
 - **Only administrators may create groups with the team prefix, or add people
   to them.** A group named like a team makes its members members of that team,
   with its models and budget. Some providers let people create groups
