@@ -54,7 +54,7 @@
             <label for="key-name">Name</label>
             <input type="text" id="key-name" placeholder="e.g. production-server" pattern="[A-Za-z0-9\-]+" title="Letters, numbers, and dashes only">
             <label for="key-duration">Duration (optional)</label>
-            <input type="text" id="key-duration" placeholder="e.g. 30d, 90d, 1mo" pattern="[0-9]+(s|m|h|d|mo)" title="Positive integer followed by s, m, h, d, or mo (a month is 30 days). Examples: 30s, 30m, 30h, 30d, 1mo" aria-describedby="key-duration-hint">
+            <input type="text" id="key-duration" placeholder="e.g. 30d, 90d, 1mo" pattern="([0-9]{1,9})(s|m|h|d|mo)" title="Positive integer followed by s, m, h, d, or mo (a month is 30 days). Examples: 30s, 30m, 30h, 30d, 1mo" aria-describedby="key-duration-hint">
             <p id="key-duration-hint" class="field-hint"></p>
             <label for="key-budget">Max Budget $ (optional)</label>
             <input type="number" id="key-budget" placeholder="e.g. 100" step="0.01">

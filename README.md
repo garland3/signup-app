@@ -70,9 +70,12 @@ made or changed through the app may be given. Leave it blank for no limit.
   duration as it was entered.
 - **It caps each period, not a key's total life.** Changing a key's duration
   (`PATCH`) starts a new period from that moment, as LiteLLM does, so an owner
-  can renew a key before it expires, each time for at most the maximum. Keys
-  that must end for good are deleted or blocked, by their owner or by whatever
-  removes people's access (the identity provider's side).
+  can renew a key, each time for at most the maximum.
+- **Deleting a key** (the Delete button, `DELETE /api/keys/{token}`) expires it at
+  once; it stays in the list as Inactive. A deleted key can't be changed or
+  renewed (400). Blocking is not final: the owner can unblock their key through
+  the API (`POST /api/keys/{token}/unblock`), even one an administrator blocked in
+  LiteLLM, so an administrator who must end a key for good deletes it in LiteLLM.
 - **The Create API Key dialog** shows the maximum under the duration field, says
   what an empty field means, and checks the duration before sending it. The
   server's check is the one that counts.

@@ -430,6 +430,15 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
         _capped_duration(body.duration)
 
     info = await _verify_key_ownership(client, token, user_id)
+    # Delete (below) is a soft delete: the key expires at once ("0s") and stays
+    # listed. A new duration would bring it back, so a deleted key can't be
+    # changed: Delete means deleted.
+    meta = info.get("metadata") or {}
+    if isinstance(meta, dict) and meta.get("duration") == "0s":
+        raise HTTPException(
+            status_code=400,
+            detail="This key was deleted, so it can't be changed. Create a new key instead.",
+        )
 
     kwargs = {}
     if body.key_alias is not None:

@@ -186,9 +186,9 @@ function renderDurationHint() {
         return;
     }
     var max = appConfig.max_key_duration;
-    hint.textContent = max
+    hint.textContent = (max
         ? "At most " + max + ". Leave empty for " + max + "."
-        : "Leave empty for a key that doesn't expire.";
+        : "Leave empty for a key that doesn't expire.") + " A month is 30 days.";
 }
 
 function showToast(message, type) {

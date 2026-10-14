@@ -1371,3 +1371,23 @@ def test_startup_rejects_malformed_max_key_duration():
     )
     with pytest.raises(RuntimeError, match="MAX_KEY_DURATION"):
         _enforce_startup_safety(s)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_deleted_key_cant_be_renewed_or_changed(app):
+    """Delete expires a key ("0s") and keeps it listed; a new duration must not
+    bring it back."""
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", "metadata": {"duration": "0s"},
+        })
+    )
+    update = respx.post(f"{LITELLM}/key/update").mock(return_value=Response(200, json={}))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        renew = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+        rename = await c.patch("/api/keys/tok_abc123", json={"key_alias": "new"}, headers=AUTH)
+    assert renew.status_code == 400 and rename.status_code == 400
+    assert "deleted" in renew.json()["detail"]
+    assert not update.called
