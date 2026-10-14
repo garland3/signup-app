@@ -237,7 +237,14 @@ function renderTeamSelect() {
 
 async function loadKeys() {
     var r = await fetch(API_BASE + "/keys");
-    if (!r.ok) return;
+    if (!r.ok) {
+        // The table's box stays hidden until the keys have loaded, so say why
+        // rather than leave the area blank. A failed reload after a change
+        // keeps the keys already shown.
+        if (!keysLoaded) document.getElementById("keys-error").classList.remove("hidden");
+        return;
+    }
+    document.getElementById("keys-error").classList.add("hidden");
     currentKeys = await r.json();
     keysLoaded = true;
     renderKeys();

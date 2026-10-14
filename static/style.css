@@ -182,13 +182,15 @@ button.danger:hover {
 }
 
 /* On a window narrower than the table, the table scrolls sideways in place.
-   The padding keeps the table's shadow from being clipped, and the negative
-   margin keeps the table where it would be without the box. It can take the
+   The padding keeps the table's shadow from being clipped: it matches the
+   shadow's reach (box-shadow 0 1px 3px on table: 2px above, 3px at the sides,
+   4px below). The negative margin keeps the table where it would be without
+   the box. It can take the
    keyboard focus (index.html), so it can be scrolled without a mouse. */
 .table-scroll {
     overflow-x: auto;
-    padding: 3px;
-    margin: -3px -3px 0;
+    padding: 2px 3px 4px;
+    margin: -2px -3px -4px;
 }
 
 .table-scroll:focus-visible {
@@ -380,7 +382,8 @@ td {
     background: #1f2937;
 }
 
-#no-keys {
+#no-keys,
+#keys-error {
     text-align: center;
     color: #6b7280;
     padding: 40px;
