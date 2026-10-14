@@ -17,6 +17,25 @@ class Settings(BaseSettings):
     # unaffected; when False the /api/teams routes 404, /api/me omits teams,
     # and the create-key team selector never appears.
     FEATURE_TEAMS_ENABLED: bool = False
+    # Where team membership comes from (with FEATURE_TEAMS_ENABLED):
+    #   "litellm": LiteLLM's own memberships; people join the teams LiteLLM
+    #              lists as available themselves (self-service join)
+    #   "claims":  the identity provider: a person's teams are the groups (or
+    #              roles) in their sign-in claims that start with
+    #              TEAM_GROUP_PREFIX and name a LiteLLM team (its team_alias or
+    #              team_id). No self-join; membership is managed in the
+    #              identity provider. Needs AUTH_MODE=oauth.
+    TEAM_SOURCE: Literal["litellm", "claims"] = "litellm"
+    # TEAM_SOURCE=claims: the claim holding the groups (Keycloak: groups;
+    # Entra ID: roles, the app roles) and the prefix of those that are teams.
+    GROUPS_FIELD: str = "groups"
+    TEAM_GROUP_PREFIX: str = "project-"
+    # TEAM_SOURCE=claims: groups are re-read (refresh-token grant) before a key
+    # is made, changed or unblocked. Without a refresh token the app can't
+    # re-read them, so it uses the groups from a sign-in younger than this many
+    # seconds, or 60 (team_claims.SIGN_IN_GRACE_SECONDS), whichever is longer;
+    # older ones need a new sign-in.
+    TEAM_CLAIMS_MAX_AGE_SECONDS: int = 0
     # Optional URL path prefix the app is served under (e.g. "/start").
     # When set, all routes, static assets, and auth redirects are served
     # beneath this prefix. Leave blank to serve from the site root.

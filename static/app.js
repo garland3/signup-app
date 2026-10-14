@@ -12,6 +12,8 @@ var teamsEnabled = false;
 // empty), so key creation is blocked rather than guessed.
 var teamsUnavailable = false;
 var configLoaded = false;  // /api/config answered (appConfig is then the server's)
+// "claims" when teams come from the identity provider (no self-join).
+var teamSource = "litellm";
 var appConfig = {
     app_name: "API Keys",
     required_metadata: [],
@@ -229,6 +231,7 @@ async function loadUser() {
         }
         teamsEnabled = Array.isArray(data.teams);
         teamsUnavailable = !!data.teams_unavailable;
+        teamSource = data.team_source || "litellm";
         userTeams = data.teams || [];
         renderTeamSelect();
         // The keys may have loaded first: show their team column and names.
@@ -244,7 +247,11 @@ function teamRequirementError() {
     if (teamsUnavailable) {
         return "Couldn't load your teams right now, so keys can't be created. Try again later.";
     }
-    if (userTeams.length === 0) return "Join a team before creating a key.";
+    if (userTeams.length === 0) {
+        return teamSource === "claims"
+            ? "You aren't in any team. Teams come from your sign-in: ask your administrators to add you to one."
+            : "Join a team before creating a key.";
+    }
     return null;
 }
 
@@ -514,6 +521,11 @@ async function createKey() {
 
     if (!r.ok) {
         var err = await r.json().catch(function() { return {}; });
+        // 401 = the sign-in ended (checked before a key is made): sign in again.
+        if (r.status === 401) {
+            window.location.href = API_BASE + "/auth/login";
+            return;
+        }
         // 409 = duplicate key name. Keep the modal open, surface the
         // error inline, and focus the name field so the user can pick a
         // different name without retyping anything else.

@@ -10,6 +10,7 @@ from app.core import durations
 from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
 from app.core.rate_limit import limiter
+from app.core.team_claims import refresh_groups, teams_for_groups
 
 logger = logging.getLogger(__name__)
 
@@ -331,14 +332,25 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # or a failed membership lookup all block creation. Validate before
     # provisioning anything so a rejected request never creates a user.
     team_id = None
+    from_claims = settings.TEAM_SOURCE == "claims"
     if settings.FEATURE_TEAMS_ENABLED:
         if not body.team_id:
             raise HTTPException(
                 status_code=400,
-                detail="A team is required. Join a team before creating a key.",
+                detail=(
+                    "A team is required. Your teams come from your sign-in; ask your administrators if you have none."
+                    if from_claims
+                    else "A team is required. Join a team before creating a key."
+                ),
             )
+        if from_claims:
+            # The identity provider's current groups, not the session's.
+            groups = await refresh_groups(request)
         try:
-            teams = await client.list_teams(user_id=user_id)
+            if from_claims:
+                teams = await teams_for_groups(groups, client)
+            else:
+                teams = await client.list_teams(user_id=user_id)
         except Exception as e:
             raise _upstream_error("list_teams", e)
         if body.team_id not in {t.get("team_id") for t in teams}:
@@ -352,6 +364,18 @@ async def create_key(body: CreateKeyRequest, request: Request):
         await client.ensure_user(user_id, email=user_email)
     except Exception as e:
         raise _upstream_error("ensure_user", e)
+
+    # Teams from claims: the person is in the team by the identity provider's
+    # say; make them a LiteLLM member too, so the team's per-member limits
+    # apply to their keys. If generating the key then fails, they stay a member;
+    # harmless, since membership follows the group (the reconciler, README).
+    if team_id and from_claims:
+        try:
+            added = await client.ensure_team_member(team_id, user_id)
+        except Exception as e:
+            raise _upstream_error("team_member_add", e)
+        if added:
+            audit("team_claims_member_add", user=user_email, team_id=team_id)
 
     # Persist duration in metadata so we can show it in the UI
     if duration:
@@ -435,6 +459,36 @@ def _neg_created(created: str) -> str:
     return "".join(chr(255 - ord(c)) for c in (created or ""))
 
 
+async def _require_current_team(request: Request, client: LiteLLMClient, info: dict) -> None:
+    """With teams from claims, the key's team must still be one of the person's
+    teams, re-read from the identity provider as for a new key. Someone taken
+    out of a group can't then widen (budget, limits, models, duration) or unblock
+    their keys in it before the reconciler removes them. Deleting and blocking
+    only reduce access, so they don't call this.
+    """
+    s = get_settings()
+    if not (s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims"):
+        return
+    # Each check is a refresh-token grant at the identity provider, so changes
+    # share key creation's hourly cap (in their own count).
+    if not limiter.check(
+        "key_change", request.state.user_id, s.RATE_LIMIT_KEY_CREATE_PER_HOUR, 3600
+    ):
+        audit("rate_limited", bucket="key_change", user=request.state.user_email)
+        raise HTTPException(status_code=429, detail="Too many key changes")
+    groups = await refresh_groups(request)
+    try:
+        teams = await teams_for_groups(groups, client)
+    except Exception as e:
+        raise _upstream_error("list_teams", e)
+    if not info.get("team_id") or info["team_id"] not in {t["team_id"] for t in teams}:
+        raise HTTPException(
+            status_code=403,
+            detail="You're no longer in this key's team, so it can't be changed or unblocked. "
+            "You can still block or delete it.",
+        )
+
+
 @router.patch("/keys/{token}")
 async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     _reject_raw_api_key(token)
@@ -457,6 +511,7 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
             status_code=400,
             detail="This key was deleted, so it can't be changed. Create a new key instead.",
         )
+    await _require_current_team(request, client, info)
 
     kwargs = {}
     if body.key_alias is not None:
@@ -559,7 +614,8 @@ async def unblock_key(token: str, request: Request):
     user_email = request.state.user_email
     user_id = request.state.user_id
 
-    await _verify_key_ownership(client, token, user_id)
+    info = await _verify_key_ownership(client, token, user_id)
+    await _require_current_team(request, client, info)
 
     try:
         result = await client.unblock_key(key=token)
