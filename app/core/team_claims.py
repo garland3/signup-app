@@ -42,14 +42,12 @@ FORCED_RELOAD_SECONDS = 10
 _teams_cache: tuple[float, dict[str, dict]] | None = None  # (loaded at, name -> team)
 _last_forced_reload = 0.0
 
-# Token refreshes in flight, and those just done, by a digest of the refresh
-# token used: concurrent requests from one session (a double click, a retry)
-# share one refresh. Sending the same refresh token twice would trip the
-# provider's reuse detection (Keycloak's "Revoke Refresh Token"), refusing the
-# second and possibly ending the whole sign-in session.
-RECENT_REFRESH_SECONDS = 30
+# Token refreshes in flight, by a digest of the refresh token used: concurrent
+# requests from one session (a double click, a retry) share one refresh.
+# Sending the same refresh token twice would trip the provider's reuse
+# detection (Keycloak's "Revoke Refresh Token"), refusing the second and
+# possibly ending the whole sign-in session.
 _inflight: dict[str, asyncio.Task] = {}
-_recent: dict[str, tuple[float, tuple[dict, dict]]] = {}
 
 _now = time.time  # the clock for sign-in ages; tests replace it
 
@@ -69,7 +67,6 @@ def reset_cache() -> None:
     _teams_cache = None
     _last_forced_reload = 0.0
     _inflight.clear()
-    _recent.clear()
 
 
 OVERAGE_DETAIL = (
@@ -112,7 +109,8 @@ def groups_from_claims(claims: dict, settings: Settings) -> list[str]:
 
 async def _teams_by_name(client: LiteLLMClient, *, refresh: bool = False) -> dict[str, dict]:
     """Teams by name: their team_alias, else their team_id. A name that is one
-    team's alias and another's ID means the alias (logged)."""
+    team's alias and another's ID means the alias, and an alias two teams share
+    means the first LiteLLM lists (both logged)."""
     global _teams_cache
     now = time.monotonic()
     if refresh or _teams_cache is None or now - _teams_cache[0] > TEAMS_TTL_SECONDS:
@@ -121,6 +119,11 @@ async def _teams_by_name(client: LiteLLMClient, *, refresh: bool = False) -> dic
         for t in await client.list_all_teams():
             alias, team_id = t.get("team_alias"), t.get("team_id")
             if isinstance(alias, str) and alias:
+                if alias in aliases:
+                    logger.warning(
+                        "Teams %s and %s share the alias %s; using %s",
+                        aliases[alias].get("team_id"), team_id, alias, aliases[alias].get("team_id"),
+                    )
                 aliases.setdefault(alias, t)
             if isinstance(team_id, str) and team_id:
                 ids.setdefault(team_id, t)
@@ -164,9 +167,9 @@ async def refresh_groups(request: Request) -> list[str]:
     no refresh token (the provider issued none; Entra ID needs the
     offline_access scope), the person must sign in again (401), unless the
     groups from sign-in are younger than SIGN_IN_GRACE_SECONDS or
-    TEAM_CLAIMS_MAX_AGE_SECONDS, whichever is longer. A token
-    that leaves the groups out (overage) is refused (403). Concurrent requests
-    share one refresh (_refresh_shared).
+    TEAM_CLAIMS_MAX_AGE_SECONDS, whichever is longer. A token that leaves the
+    groups out (overage) is refused (403). Concurrent requests share one
+    refresh (_refresh_shared).
     """
     s = get_settings()
     session = request.session
@@ -190,7 +193,9 @@ async def refresh_groups(request: Request) -> list[str]:
     field = s.OAUTH_USER_ID_FIELD or s.OAUTH_EMAIL_FIELD
     expected = session.get("user_id") if s.OAUTH_USER_ID_FIELD else session.get("user_email")
     if claims.get(field) != expected:
+        user = session.get("user_email")
         session.clear()
+        audit("oauth_refresh_other_user", user=user, field=field)
         raise HTTPException(status_code=401, detail="Your sign-in has ended; sign in again")
     groups = store_groups(session, claims, s)
     if tokens.get("refresh_token"):
@@ -205,18 +210,18 @@ async def _refresh_shared(refresh_token: str, s: Settings, session: dict) -> tup
     """(tokens, claims) for a refresh token, refreshing it only once.
 
     The refresh runs as a task of its own, which every request for the same
-    refresh token awaits (shielded): one that arrives while it runs waits for
-    it, one that arrives soon after gets its result. A request that goes away
-    (its client disconnected) doesn't cancel it, and the task itself writes the
-    rotated refresh token back to the session, so the provider's rotation isn't
-    lost. Each request then checks the claims and updates its own session.
+    refresh token awaits (shielded). A request that goes away (its client
+    disconnected) doesn't cancel it, and the task itself writes the rotated
+    refresh token back to the session, so the provider's rotation isn't lost.
+    Each request then checks the claims and updates its own session.
+
+    Nothing is kept once the task is done: a request reads the session's
+    refresh token and joins the task without yielding in between, and the task
+    writes the rotated token and leaves _inflight without yielding either. So a
+    request either joins a running refresh or reads the rotated token; it can't
+    send the old one again.
     """
     key = hashlib.sha256(refresh_token.encode()).hexdigest()
-    now = time.monotonic()
-    for k in [k for k, (at, _) in _recent.items() if now - at > RECENT_REFRESH_SECONDS]:
-        del _recent[k]
-    if key in _recent:
-        return _recent[key][1]
     task = _inflight.get(key)
     if task is None:
         task = asyncio.create_task(_refresh_task(key, refresh_token, s, session))
@@ -234,7 +239,6 @@ def _retrieve_exception(task: asyncio.Task) -> None:
 async def _refresh_task(key: str, refresh_token: str, s: Settings, session: dict) -> tuple[dict, dict]:
     try:
         tokens, claims = await _refresh(refresh_token, s)
-        _recent[key] = (time.monotonic(), (tokens, claims))
         # The session dict is the store's own (the in-memory store hands it out by
         # reference), so this write is kept even if the request that started the
         # task is gone. A store that copies sessions would need its own write here.

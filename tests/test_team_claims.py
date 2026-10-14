@@ -59,6 +59,21 @@ def _fresh_caches():
     team_claims.reset_cache()
 
 
+@pytest.fixture
+def audited(monkeypatch):
+    """The audit events the claims code emits: [(event, fields)]."""
+    from app.routes import keys as keys_routes
+
+    events = []
+
+    def record(event, **fields):
+        events.append((event, fields))
+
+    monkeypatch.setattr(team_claims, "audit", record)
+    monkeypatch.setattr(keys_routes, "audit", record)
+    return events
+
+
 class Provider:
     """The token endpoint: the sign-in's tokens, then each refresh's."""
 
@@ -175,7 +190,7 @@ async def test_no_self_join():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_key_in_a_team_refreshes_groups_and_adds_the_member():
+async def test_key_in_a_team_refreshes_groups_and_adds_the_member(audited):
     _mock_provider()
     member_add, generate = _litellm()
     provider = Provider(GROUPS)
@@ -189,6 +204,7 @@ async def test_key_in_a_team_refreshes_groups_and_adds_the_member():
     assert member == {"team_id": "t-alpha", "member": {"user_id": "0b9f-sub", "role": "user"}}
     key = json.loads(generate.calls[0].request.content)
     assert key["team_id"] == "t-alpha" and key["user_id"] == "0b9f-sub"
+    assert ("team_claims_member_add", {"user": "alice@example.com", "team_id": "t-alpha"}) in audited
 
 
 @pytest.mark.asyncio
@@ -226,7 +242,7 @@ async def test_refresh_refused_ends_the_session():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_refresh_for_another_person_ends_the_session():
+async def test_refresh_for_another_person_ends_the_session(audited):
     _mock_provider()
     _litellm()
     provider = Provider(GROUPS)
@@ -236,6 +252,7 @@ async def test_refresh_for_another_person_ends_the_session():
         provider.sub = "someone-else"
         r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
     assert r.status_code == 401
+    assert [e for e, _ in audited if e == "oauth_refresh_other_user"] == ["oauth_refresh_other_user"]
 
 
 @pytest.mark.asyncio
@@ -361,7 +378,7 @@ async def test_groups_overage_at_sign_in_shows_teams_unknown():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_already_a_member_is_not_added_again():
+async def test_already_a_member_is_not_added_again(audited):
     _mock_provider()
     member_add, generate = _litellm(members={"t-alpha"})
     provider = Provider(GROUPS)
@@ -372,6 +389,7 @@ async def test_already_a_member_is_not_added_again():
     assert r.status_code == 201
     assert not member_add.called  # membership looked up, not inferred from an error
     assert generate.called
+    assert "team_claims_member_add" not in [e for e, _ in audited]
 
 
 @pytest.mark.asyncio
@@ -607,7 +625,6 @@ async def test_the_rotated_refresh_token_is_kept():
     async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
         await _sign_in(c, provider)
         first = await c.post("/api/keys", json={"name": "k1", "team_id": "t-alpha"}, headers=ORIGIN)
-        team_claims._recent.clear()  # no shortcut: the next refresh must use the rotated token
         second = await c.post("/api/keys", json={"name": "k2", "team_id": "t-alpha"}, headers=ORIGIN)
     assert (first.status_code, second.status_code) == (201, 201)
     assert provider.refreshes == 2  # rt-1, then rt-2 (reusing rt-1 would have been refused)
@@ -728,3 +745,22 @@ async def test_key_changes_that_re_read_groups_are_rate_limited():
     assert provider.refreshes == refreshes  # the limited one didn't reach the provider
     assert routes["update"].call_count == 1
     assert block.status_code == 200  # blocking only reduces access: not limited
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_alias_two_teams_share_means_the_first_and_is_logged(caplog):
+    _mock_provider()
+    teams = [
+        {"team_id": "t-first", "team_alias": "project-alpha"},
+        {"team_id": "t-second", "team_alias": "project-alpha"},
+    ]
+    respx.get(f"{LITELLM}/team/list").mock(return_value=Response(200, json=teams))
+    provider = Provider(["project-alpha"])
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        with caplog.at_level("WARNING", logger="app.core.team_claims"):
+            me = (await c.get("/api/me")).json()
+    assert [t["team_id"] for t in me["teams"]] == ["t-first"]
+    assert "share the alias project-alpha" in caplog.text

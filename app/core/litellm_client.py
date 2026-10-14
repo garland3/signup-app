@@ -305,8 +305,9 @@ class LiteLLMClient:
         r.raise_for_status()
         return r.json()
 
-    async def ensure_team_member(self, team_id: str, user_id: str) -> None:
+    async def ensure_team_member(self, team_id: str, user_id: str) -> bool:
         """Make ``user_id`` a member ("user" role) of ``team_id`` unless it is one.
+        True if this call added them.
 
         Checks membership first (``GET /team/list?user_id=``) rather than reading
         LiteLLM's error text for a repeated add. If the add fails, membership is
@@ -316,13 +317,14 @@ class LiteLLMClient:
             return team_id in {t.get("team_id") for t in teams}
 
         if member(await self.list_teams(user_id)):
-            return
+            return False
         try:
             await self.add_team_member(team_id, user_id, role="user")
         except httpx.HTTPStatusError:
             if member(await self.list_teams(user_id)):
-                return
+                return False
             raise
+        return True
 
     async def get_user_info(self, user_id: str) -> dict | None:
         """GET /user/info?user_id=...

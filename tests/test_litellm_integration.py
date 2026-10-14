@@ -61,9 +61,10 @@ def _in(team_id, teams):
 async def test_member_add_is_idempotent(probe):
     client, _, _, team_id, user_id = probe
     assert not _in(team_id, await client.list_teams(user_id))
-    await client.ensure_team_member(team_id, user_id)
+    assert await client.ensure_team_member(team_id, user_id) is True  # added
     assert _in(team_id, await client.list_teams(user_id))
-    await client.ensure_team_member(team_id, user_id)  # again: no error, no second membership
+    # Again: no error, no second membership, and not reported as added.
+    assert await client.ensure_team_member(team_id, user_id) is False
     teams = await client.list_teams(user_id)
     assert [t.get("team_id") for t in teams].count(team_id) == 1
 

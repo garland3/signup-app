@@ -371,9 +371,11 @@ async def create_key(body: CreateKeyRequest, request: Request):
     # harmless, since membership follows the group (the reconciler, README).
     if team_id and from_claims:
         try:
-            await client.ensure_team_member(team_id, user_id)
+            added = await client.ensure_team_member(team_id, user_id)
         except Exception as e:
             raise _upstream_error("team_member_add", e)
+        if added:
+            audit("team_claims_member_add", user=user_email, team_id=team_id)
 
     # Persist duration in metadata so we can show it in the UI
     if duration:
