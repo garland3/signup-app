@@ -45,7 +45,8 @@ def main():
         capture(
             page,
             f"{APP_BASE}/",
-            "#keys-table",
+            # The keys, or "No API keys yet": either shows once they've loaded.
+            "#keys-table-box:not(.hidden), #no-keys:not(.hidden)",
             OUT / "keys-page.png",
         )
 

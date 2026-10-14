@@ -185,8 +185,8 @@ button.danger:hover {
    The padding keeps the table's shadow from being clipped: it matches the
    shadow's reach (box-shadow 0 1px 3px on table: 2px above, 3px at the sides,
    4px below). The negative margin keeps the table where it would be without
-   the box. It can take the
-   keyboard focus (index.html), so it can be scrolled without a mouse. */
+   the box. The box can take the keyboard focus (index.html), so it can be
+   scrolled without a mouse. */
 .table-scroll {
     overflow-x: auto;
     padding: 2px 3px 4px;

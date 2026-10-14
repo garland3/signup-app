@@ -236,16 +236,21 @@ function renderTeamSelect() {
 }
 
 async function loadKeys() {
-    var r = await fetch(API_BASE + "/keys");
-    if (!r.ok) {
-        // The table's box stays hidden until the keys have loaded, so say why
-        // rather than leave the area blank. A failed reload after a change
-        // keeps the keys already shown.
-        if (!keysLoaded) document.getElementById("keys-error").classList.remove("hidden");
+    // The table's box stays hidden until the keys have loaded, so a failed
+    // first load says so rather than leave the area blank. A failed reload
+    // after a change keeps the keys already shown, with a notice.
+    var keys;
+    try {
+        var r = await fetch(API_BASE + "/keys");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        keys = await r.json();
+    } catch (e) {
+        if (keysLoaded) showToast("Couldn't refresh your keys. Reload the page to see the latest.", "error");
+        else document.getElementById("keys-error").classList.remove("hidden");
         return;
     }
     document.getElementById("keys-error").classList.add("hidden");
-    currentKeys = await r.json();
+    currentKeys = keys;
     keysLoaded = true;
     renderKeys();
 }
@@ -255,15 +260,15 @@ function renderKeys() {
     var noKeys = document.getElementById("no-keys");
     // The table's scroll box, not just the table, so an empty box isn't left
     // in the keyboard's tab order (it's hidden until the keys have loaded).
-    var table = document.getElementById("keys-table-box");
+    var tableBox = document.getElementById("keys-table-box");
 
     if (currentKeys.length === 0) {
-        table.classList.add("hidden");
+        tableBox.classList.add("hidden");
         noKeys.classList.remove("hidden");
         return;
     }
 
-    table.classList.remove("hidden");
+    tableBox.classList.remove("hidden");
     noKeys.classList.add("hidden");
 
     var metaFields = appConfig.required_metadata || [];
