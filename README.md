@@ -63,7 +63,8 @@ made or changed through the app may be given. Leave it blank for no limit.
   expires.
 - **A longer duration is refused** (400), when a key is made (`POST /api/keys`)
   and when its duration is changed (`PATCH /api/keys/{token}`).
-- **A month is 30 days.** LiteLLM itself reads `mo` as calendar months (28 to 31
+- **A month is 30 days** (a behavior change: before, `mo` went to LiteLLM as
+  is, a calendar month, on every deployment, with or without a maximum). LiteLLM itself reads `mo` as calendar months (28 to 31
   days, depending on the date), so the app sends LiteLLM months as days (`3mo`
   as `90d`): a key lasts exactly the duration that was checked. `MAX_KEY_DURATION`
   in months counts the same way (`3mo` is 90 days). The keys list shows the
@@ -72,8 +73,9 @@ made or changed through the app may be given. Leave it blank for no limit.
   (`PATCH`) starts a new period from that moment, as LiteLLM does, so an owner
   can renew a key, each time for at most the maximum.
 - **Deleting a key** (the Delete button, `DELETE /api/keys/{token}`) expires it at
-  once; it stays in the list as Inactive. A deleted key can't be changed or
-  renewed (400). Blocking is not final: the owner can unblock their key through
+  once and marks it deleted (`deleted_at` in its metadata, which only the app
+  writes: users' metadata can't set it, or `duration`); it stays in the list as
+  Inactive. A deleted key can't be changed or renewed (400). Blocking is not final: the owner can unblock their key through
   the API (`POST /api/keys/{token}/unblock`), even one an administrator blocked in
   LiteLLM, so an administrator who must end a key for good deletes it in LiteLLM.
 - **The Create API Key dialog** shows the maximum under the duration field, says

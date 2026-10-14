@@ -13,7 +13,7 @@ STATIC = pathlib.Path(__file__).resolve().parent.parent / "static"
 
 def _js_const(name: str) -> str:
     source = (STATIC / "app.js").read_text()
-    match = re.search(rf"^var {name} = (.+?);$", source, re.MULTILINE)
+    match = re.search(rf"^var {name} = ([^;]+);", source, re.MULTILINE)
     assert match, f"var {name} not found in static/app.js"
     return match.group(1)
 
@@ -42,3 +42,12 @@ def test_the_dialogs_units_are_the_servers():
             value *= int(factor)
         units[unit] = value
     assert units == durations.UNIT_SECONDS
+
+
+def test_the_dialogs_longest_duration_is_the_servers():
+    js = _js_const("MAX_DURATION_SECONDS").strip()
+    assert re.fullmatch(r"[0-9 *]+", js), js
+    value = 1
+    for factor in js.split("*"):
+        value *= int(factor)
+    assert value == durations.MAX_SECONDS

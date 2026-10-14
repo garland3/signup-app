@@ -1373,21 +1373,77 @@ def test_startup_rejects_malformed_max_key_duration():
         _enforce_startup_safety(s)
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_deleted_key_cant_be_renewed_or_changed(app):
-    """Delete expires a key ("0s") and keeps it listed; a new duration must not
-    bring it back."""
+def _mock_owned_key(metadata, expires=None):
     respx.get(f"{LITELLM}/key/info").mock(
         return_value=Response(200, json={
             "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
-            "user_id": "alice@example.com", "metadata": {"duration": "0s"},
+            "user_id": "alice@example.com", "metadata": metadata, "expires": expires,
         })
     )
-    update = respx.post(f"{LITELLM}/key/update").mock(return_value=Response(200, json={}))
+    return respx.post(f"{LITELLM}/key/update").mock(
+        side_effect=lambda request: Response(200, json={
+            "token_id": "tok_abc123", "key_alias": "alice@example.com-k",
+            "user_id": "alice@example.com", **json.loads(request.content),
+        })
+    )
+
+
+@pytest.mark.parametrize("metadata, expires", [
+    ({"duration": "0s", "deleted_at": "2026-10-14T10:00:00+00:00"}, "2026-10-14T10:00:00Z"),
+    ({"duration": "0s"}, "2026-01-01T00:00:00Z"),  # deleted before deleted_at existed
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_deleted_key_cant_be_renewed_or_changed(app, metadata, expires):
+    """Delete expires a key and keeps it listed; a new duration must not bring it back."""
+    update = _mock_owned_key(metadata, expires)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         renew = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
         rename = await c.patch("/api/keys/tok_abc123", json={"key_alias": "new"}, headers=AUTH)
     assert renew.status_code == 400 and rename.status_code == 400
     assert "deleted" in renew.json()["detail"]
     assert not update.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_live_key_cant_be_locked_through_metadata(app):
+    """deleted_at and duration are the app's: a user writing them changes nothing,
+    and a live key whose metadata says "0s" isn't taken for deleted."""
+    update = _mock_owned_key({"duration": "0s"}, "2999-01-01T00:00:00Z")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        lock = await c.patch("/api/keys/tok_abc123", json={"metadata": {"deleted_at": "now", "duration": "0s", "project": "x"}}, headers=AUTH)
+        renew = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+    assert lock.status_code == 200 and renew.status_code == 200
+    written = json.loads(update.calls[0].request.content)["metadata"]
+    assert "deleted_at" not in written and written["project"] == "x"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_users_metadata_cant_set_the_apps_names_on_create(app):
+    mock_ensure_user()
+    generate_route = _mock_generate()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k", "metadata": {"deleted_at": "x", "duration": "0s"}}, headers=AUTH)
+    assert r.status_code == 201
+    sent = json.loads(generate_route.calls[0].request.content)["metadata"]
+    assert "deleted_at" not in sent and "duration" not in sent
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_marks_the_key_deleted(app):
+    update = _mock_owned_key({"project": "x"}, None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.delete("/api/keys/tok_abc123", headers=AUTH)
+    assert r.status_code == 200
+    sent = json.loads(update.calls[0].request.content)
+    assert sent["duration"] == "0s" and sent["metadata"]["deleted_at"] and sent["metadata"]["project"] == "x"
+
+
+@pytest.mark.parametrize("duration, ok", [("36500d", True), ("36501d", False), ("1216mo", True), ("1217mo", False), ("999999999mo", False)])
+def test_durations_are_at_most_100_years(duration, ok):
+    from app.core.durations import parse
+
+    assert (parse(duration) is not None) == ok

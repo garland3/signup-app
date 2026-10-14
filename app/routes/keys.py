@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
@@ -123,9 +124,31 @@ _COLLAPSE_DASH_RE = re.compile(r"-+")
 # Durations ("30d", "1mo"): app/core/durations.py, shared with the startup check.
 _DURATION_HELP = (
     "Invalid duration. Use a positive integer followed by a unit: "
-    "s (seconds), m (minutes), h (hours), d (days), or mo (months). "
-    "Example: 30d, 1mo."
+    "s (seconds), m (minutes), h (hours), d (days), or mo (months), "
+    "up to 100 years. Example: 30d, 1mo."
 )
+
+# Metadata the app writes itself, which users' metadata may not set: the
+# duration shown in the UI, and Delete's marker.
+_RESERVED_METADATA = ("duration", "deleted_at")
+
+
+def _user_metadata(metadata: dict | None) -> dict:
+    """User-supplied metadata without the names the app reserves."""
+    return {k: v for k, v in (metadata or {}).items() if k not in _RESERVED_METADATA}
+
+
+def _is_deleted(info: dict) -> bool:
+    """Whether Delete (a soft delete) was used on the key: its deleted_at, which
+    only the app writes. Keys deleted before deleted_at existed: the duration
+    "0s" Delete wrote, on a key that has expired (so writing "0s" couldn't lock
+    a live key)."""
+    meta = info.get("metadata") or {}
+    if not isinstance(meta, dict):
+        return False
+    if meta.get("deleted_at"):
+        return True
+    return meta.get("duration") == "0s" and _is_expired(info.get("expires"))
 
 
 def _validate_duration(value: str) -> None:
@@ -277,7 +300,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     # Validate required metadata fields
     required = settings.required_metadata_fields
-    metadata = dict(body.metadata or {})
+    metadata = _user_metadata(body.metadata)
     missing = [f for f in required if not str(metadata.get(f, "")).strip()]
     if missing:
         raise HTTPException(
@@ -430,11 +453,10 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
         _capped_duration(body.duration)
 
     info = await _verify_key_ownership(client, token, user_id)
-    # Delete (below) is a soft delete: the key expires at once ("0s") and stays
-    # listed. A new duration would bring it back, so a deleted key can't be
-    # changed: Delete means deleted.
-    meta = info.get("metadata") or {}
-    if isinstance(meta, dict) and meta.get("duration") == "0s":
+    # Delete (below) is a soft delete: the key expires at once and stays listed.
+    # A new duration would bring it back, so a deleted key can't be changed:
+    # Delete means deleted.
+    if _is_deleted(info):
         raise HTTPException(
             status_code=400,
             detail="This key was deleted, so it can't be changed. Create a new key instead.",
@@ -465,13 +487,13 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
         existing_meta = info.get("metadata") or {}
         if not isinstance(existing_meta, dict):
             existing_meta = {}
-        merged = {**existing_meta, **(body.metadata or {}), "duration": body.duration}
+        merged = {**existing_meta, **_user_metadata(body.metadata), "duration": body.duration}
         kwargs["metadata"] = merged
     elif body.metadata is not None:
         existing_meta = info.get("metadata") or {}
         if not isinstance(existing_meta, dict):
             existing_meta = {}
-        kwargs["metadata"] = {**existing_meta, **body.metadata}
+        kwargs["metadata"] = {**existing_meta, **_user_metadata(body.metadata)}
 
     try:
         result = await client.update_key(key=token, **kwargs)
@@ -502,7 +524,8 @@ async def delete_key(token: str, request: Request):
     existing_meta = info.get("metadata") or {}
     if not isinstance(existing_meta, dict):
         existing_meta = {}
-    merged_meta = {**existing_meta, "duration": "0s"}
+    merged_meta = {**existing_meta, "duration": "0s",
+                   "deleted_at": datetime.now(UTC).isoformat(timespec="seconds")}
 
     try:
         await client.update_key(

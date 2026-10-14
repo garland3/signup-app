@@ -151,11 +151,12 @@ function prettyLabel(field) {
 // rejected before we make a network round-trip.
 var DURATION_RE = /^([0-9]{1,9})(s|m|h|d|mo)$/;
 var DURATION_HELP = "Invalid duration. Use a positive integer followed by " +
-    "s, m, h, d, or mo (e.g. 30d, 1mo).";
+    "s, m, h, d, or mo, up to 100 years (e.g. 30d, 1mo).";
 
 // Seconds per unit, a month counting as 30 days, as in app/core/durations.py,
 // which enforces MAX_KEY_DURATION; this only gives earlier feedback.
 var UNIT_SECONDS = {s: 1, m: 60, h: 3600, d: 86400, mo: 30 * 86400};
+var MAX_DURATION_SECONDS = 100 * 365 * 86400;  // 100 years, as the server
 
 // True if duration is no longer than limit (both valid).
 function withinDuration(duration, limit) {
@@ -168,6 +169,7 @@ function validateDuration(value) {
     if (!value) return null;
     var m = DURATION_RE.exec(value);
     if (!m || parseInt(m[1], 10) <= 0) return DURATION_HELP;
+    if (parseInt(m[1], 10) * UNIT_SECONDS[m[2]] > MAX_DURATION_SECONDS) return DURATION_HELP;
     var max = appConfig.max_key_duration;
     if (max && !withinDuration(value, max)) {
         return "Keys may last at most " + max + ". Choose a shorter duration.";

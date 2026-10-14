@@ -23,13 +23,20 @@ DURATION_RE = re.compile(r"^([0-9]{1,9})(s|m|h|d|mo)$")
 DAYS_PER_MONTH = 30
 UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "mo": DAYS_PER_MONTH * 86400}
 
+# The longest duration at all, 100 years: the digit limit alone allows
+# 999,999,999 months, which LiteLLM can't turn into a date (a 502, not a 400).
+MAX_SECONDS = 100 * 365 * 86400
+
 
 def parse(value: str) -> tuple[int, str] | None:
-    """(count, unit) for a valid duration, or None (not one, or zero)."""
+    """(count, unit) for a valid duration, or None (not one, zero, or over 100 years)."""
     match = DURATION_RE.fullmatch(value)
     if not match or int(match.group(1)) <= 0:
         return None
-    return int(match.group(1)), match.group(2)
+    n, unit = int(match.group(1)), match.group(2)
+    if n * UNIT_SECONDS[unit] > MAX_SECONDS:
+        return None
+    return n, unit
 
 
 def seconds(value: str) -> int:
