@@ -179,10 +179,10 @@ and needs no database:
 | User | `User.id` (assigned by the bridge) | same value as `user_id` | Stable, no lookup table |
 | User | `User.externalId` (Entra object ID) | stored in LiteLLM user `metadata` | Lets the bridge answer Entra's lookups |
 | User disabled | `active: false` | remove the user from every team (LiteLLM deletes their team keys) | |
-| Security group | `Group.id` (assigned by the bridge) | LiteLLM `team_id` | Stable, no lookup table |
+| Security group | `Group.id` (assigned by the bridge) | LiteLLM `team_id` | Stable, no lookup table. **Adopting an existing team:** a LiteLLM admin opts it in by setting `scim_managed: true` in the team's metadata, with `team_alias` equal to the Entra group name. Entra's first lookup (`filter=displayName eq "..."`) then returns that team's `team_id` and Entra uses it. A team with the same name that is not opted in is never returned or changed: Entra's create fails with 409 and shows in its provisioning logs. |
 | Security group | `Group.displayName` | `team_alias` | Renames in Entra flow through |
 | Security group | `Group.externalId` | stored in team `metadata` | |
-| Group member | `Group.members` | team member, role `user` | Team admins stay managed in LiteLLM |
+| Group member | `Group.members` | team member, role `user` | Team admins stay managed in LiteLLM. The bridge records the members it added in team metadata (`scim_members`) |
 | Access package | not sent | not represented | Approval, expiry, and review live only in Entra |
 | Team models / budget | not sent | team settings | Set by the LiteLLM admin |
 
@@ -200,7 +200,15 @@ and needs no database:
      Validate with Microsoft's SCIM validator.
    - Auth: a dedicated bearer token (`SCIM_BEARER_TOKEN`), compared in
      constant time. Machine-to-machine, separate from user sign-in, and
-     enforced in the auth middleware rather than by skipping it.
+     enforced in the auth middleware rather than by skipping it. SCIM
+     requests never consult `AUTH_USER_HEADER`. The reverse proxy must route
+     only the exact, normalized prefix `<ROOT_PATH>/scim/v2/` to the bridge
+     and strip `X-User-Email` (or the configured `AUTH_USER_HEADER`) on that
+     route.
+   - Scoping (only `scim_managed` teams, only role `user` members, no key
+     creation) is enforced **only in the bridge's code**. LiteLLM sees the
+     full `LITELLM_ADMIN_KEY`, so a bridge bug could do anything that key
+     can; tests must cover each scoping rule.
    - Writes go through the existing `LiteLLMClient`, with new methods for
      `/team/new`, `/team/update`, `/team/delete`, and `/team/member_delete`.
      `/key/list` and `/key/block` already exist.
@@ -209,10 +217,20 @@ and needs no database:
    disabled, the UI shows a "Request access" link (`TEAMS_ACCESS_REQUEST_URL`),
    and the app stops creating LiteLLM users itself (users come from SCIM, so
    a mismatched identity shows up as "no team" rather than as a duplicate).
-3. **Reconciliation command.** Re-applies Entra's view (via the bridge's
-   own data in LiteLLM): removes members Entra no longer lists, which deletes
-   their team keys, and blocks any team key that still works afterwards (the
-   fallback). Run as a cron or Kubernetes CronJob. Same code path as the SCIM
+3. **Reconciliation command.** LiteLLM alone can't tell a manual add from a
+   SCIM add, or know about a removal Entra failed to send, so reconciliation
+   uses two references:
+   - **Manual adds:** for each `scim_managed` team, any role `user` member not
+     in the bridge's `scim_members` list is removed (deleting their team
+     keys).
+   - **Missed removes:** `scim_members` is compared with the Entra group's
+     current members, read from Microsoft Graph (application permission
+     `GroupMember.Read.All`). Without Graph access, missed removes are only
+     corrected when Entra runs a full provisioning cycle ("Restart
+     provisioning"), and this part of reconciliation is skipped.
+
+   Any team key that still works after a removal is blocked (the fallback).
+   Run as a cron or Kubernetes CronJob, using the same code path as the SCIM
    removal handler.
 4. **One identity helper.** A single function normalizes a user ID
    (`STRIP_USER_DOMAIN`, lowercasing) and is shared by the auth middleware
@@ -272,7 +290,8 @@ No change to the rule that every key requires team membership.
 
 - **One source of truth.** With SCIM, Entra decides who is in which team.
   Self-join is off, and manual team-membership changes in LiteLLM are
-  break-glass only (the next reconciliation may undo them).
+  break-glass only: reconciliation removes any member of a `scim_managed`
+  team that the bridge didn't add.
 - **Identity match is the critical correctness point.** If `userName` doesn't
   equal the app's user ID, users won't see their teams. Bind both to Entra's
   immutable object ID, not to `mail` or UPN, so a renamed or reused address
