@@ -75,6 +75,15 @@ def _enforce_startup_safety(settings) -> None:
     ):
         problems.append("OAUTH_CLAIMS_SOURCE=id_token requires OAUTH_ISSUER")
 
+    from app.core.config import RESERVED_KEY_METADATA
+
+    reserved = sorted(set(settings.required_metadata_fields) & set(RESERVED_KEY_METADATA))
+    if reserved:
+        problems.append(
+            f"REQUIRED_KEY_METADATA lists {', '.join(reserved)}, which the app "
+            "writes itself and users can't set, so every key creation would fail"
+        )
+
     if settings.MAX_KEY_DURATION:
         from app.core import durations
 

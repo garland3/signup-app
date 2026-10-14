@@ -2,6 +2,11 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings
 
+# Key metadata the app writes itself (the duration shown in the UI, and
+# Delete's marker): users' metadata can't set it, and REQUIRED_KEY_METADATA
+# can't ask for it.
+RESERVED_KEY_METADATA = ("duration", "deleted_at")
+
 
 class Settings(BaseSettings):
     # Core

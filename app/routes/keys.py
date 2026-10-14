@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.core.audit import audit
 from app.core import durations
-from app.core.config import get_settings
+from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
 from app.core.rate_limit import limiter
 
@@ -128,27 +128,23 @@ _DURATION_HELP = (
     "up to 100 years. Example: 30d, 1mo."
 )
 
-# Metadata the app writes itself, which users' metadata may not set: the
-# duration shown in the UI, and Delete's marker.
-_RESERVED_METADATA = ("duration", "deleted_at")
 
 
 def _user_metadata(metadata: dict | None) -> dict:
     """User-supplied metadata without the names the app reserves."""
-    return {k: v for k, v in (metadata or {}).items() if k not in _RESERVED_METADATA}
+    return {k: v for k, v in (metadata or {}).items() if k not in RESERVED_KEY_METADATA}
 
 
 def _is_deleted(info: dict) -> bool:
-    """Whether Delete (a soft delete) was used on the key: its deleted_at, which
-    only the app writes. Keys deleted before deleted_at existed: the duration
-    "0s" Delete wrote, on a key that has expired (so writing "0s" couldn't lock
-    a live key)."""
+    """Whether Delete (a soft delete) was used on the key: Delete's marker
+    (deleted_at, or before it existed the duration "0s"), on a key that has
+    expired. Delete expires the key at once, so a deleted key is always both; a
+    live key with a marker written some other way (users' metadata, before
+    the app reserved these names) isn't taken for deleted."""
     meta = info.get("metadata") or {}
-    if not isinstance(meta, dict):
+    if not isinstance(meta, dict) or not _is_expired(info.get("expires")):
         return False
-    if meta.get("deleted_at"):
-        return True
-    return meta.get("duration") == "0s" and _is_expired(info.get("expires"))
+    return bool(meta.get("deleted_at")) or meta.get("duration") == "0s"
 
 
 def _validate_duration(value: str) -> None:

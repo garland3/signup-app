@@ -1389,7 +1389,7 @@ def _mock_owned_key(metadata, expires=None):
 
 
 @pytest.mark.parametrize("metadata, expires", [
-    ({"duration": "0s", "deleted_at": "2026-10-14T10:00:00+00:00"}, "2026-10-14T10:00:00Z"),
+    ({"duration": "0s", "deleted_at": "2026-01-01T00:00:00+00:00"}, "2026-01-01T00:00:00Z"),
     ({"duration": "0s"}, "2026-01-01T00:00:00Z"),  # deleted before deleted_at existed
 ])
 @pytest.mark.asyncio
@@ -1447,3 +1447,26 @@ def test_durations_are_at_most_100_years(duration, ok):
     from app.core.durations import parse
 
     assert (parse(duration) is not None) == ok
+
+
+@pytest.mark.parametrize("metadata", [{"deleted_at": "2026-01-01T00:00:00+00:00"}, {"duration": "0s"}])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_marker_on_a_live_key_doesnt_make_it_deleted(app, metadata):
+    """A marker written some other way (before the names were reserved) on a key
+    that hasn't expired: it's not deleted, and can be changed."""
+    update = _mock_owned_key(metadata, "2999-01-01T00:00:00Z")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.patch("/api/keys/tok_abc123", json={"duration": "30d"}, headers=AUTH)
+    assert r.status_code == 200
+    assert update.called
+
+
+@pytest.mark.parametrize("required", ["duration", "project,deleted_at"])
+def test_startup_refuses_reserved_names_in_required_metadata(required):
+    from app.core.config import Settings
+    from app.main import _enforce_startup_safety
+
+    s = Settings(REQUIRED_KEY_METADATA=required, FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
+    with pytest.raises(RuntimeError, match="REQUIRED_KEY_METADATA"):
+        _enforce_startup_safety(s)
