@@ -281,8 +281,9 @@ function teamRequirementError() {
 
 // Populate the create-key team selector from the user's teams. The row is
 // shown whenever the user belongs to a team, so they can see where the key
-// goes: with exactly one team it is shown but disabled (the key is scoped to
-// it implicitly, no choice to make), and with none the row stays hidden.
+// goes: with exactly one team it's the only choice (not disabled, so keyboard
+// and screen-reader users still reach it and hear the team), and with none the
+// row stays hidden.
 function renderTeamSelect() {
     var row = document.getElementById("key-team-row");
     var select = document.getElementById("key-team");
@@ -294,7 +295,6 @@ function renderTeamSelect() {
         opt.textContent = t.team_alias || t.team_id;
         select.appendChild(opt);
     });
-    select.disabled = userTeams.length === 1;
     if (userTeams.length > 0) {
         row.classList.remove("hidden");
     } else {
