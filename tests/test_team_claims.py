@@ -825,3 +825,46 @@ async def test_a_logout_during_a_refresh_stays_logged_out():
     assert r.status_code == 401
     assert me.status_code == 401  # nothing wrote the session back
     assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_failed_refresh_never_logs_the_token_endpoints_body(caplog):
+    _mock_provider()
+    _litellm()
+    provider = Provider(GROUPS)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        respx.post(TOKEN_URL).mock(side_effect=provider)
+        await _sign_in(c, provider)
+        # A success the app can't read that still holds tokens: form-encoded.
+        respx.post(TOKEN_URL).mock(return_value=Response(
+            200, content=b"access_token=at-secret&refresh_token=rt-secret",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        ))
+        with caplog.at_level("ERROR", logger="app.core.team_claims"):
+            r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert r.status_code == 502
+    assert "Token refresh failed" in caplog.text and "x-www-form-urlencoded" in caplog.text
+    assert "secret" not in caplog.text
+
+
+def test_startup_refuses_claims_without_a_group_prefix():
+    from app.main import _enforce_startup_safety
+
+    for prefix in ("", "  "):
+        with pytest.raises(RuntimeError, match="TEAM_GROUP_PREFIX"):
+            _enforce_startup_safety(_claims_settings(AUTH_MODE="oauth", TEAM_GROUP_PREFIX=prefix))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_team_matched_by_id_reports_its_own_alias():
+    _mock_provider()
+    teams = [{"team_id": "project-alpha", "team_alias": "Alpha"}]
+    respx.get(f"{LITELLM}/team/list").mock(return_value=Response(200, json=teams))
+    provider = Provider(["project-alpha"])
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        me = (await c.get("/api/me")).json()
+    assert me["teams"] == [{"team_id": "project-alpha", "team_alias": "Alpha"}]

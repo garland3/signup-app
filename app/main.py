@@ -99,6 +99,11 @@ def _enforce_startup_safety(settings) -> None:
         problems.append(
             "TEAM_SOURCE=claims requires AUTH_MODE=oauth and FEATURE_TEAMS_ENABLED=true"
         )
+    if settings.TEAM_SOURCE == "claims" and not settings.TEAM_GROUP_PREFIX.strip():
+        problems.append(
+            "TEAM_SOURCE=claims requires TEAM_GROUP_PREFIX (without one, any group "
+            "named like a team would grant it)"
+        )
 
     if settings.AUTH_MODE == "oauth" and not settings.SESSION_SECRET:
         problems.append("SESSION_SECRET must be set when AUTH_MODE=oauth")

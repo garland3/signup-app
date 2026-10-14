@@ -150,7 +150,7 @@ async def teams_for_groups(groups: list[str], client: LiteLLMClient) -> list[dic
     for g in groups:
         team = index.get(g)
         if team and team.get("team_id"):
-            out.append({"team_id": team["team_id"], "team_alias": g})
+            out.append({"team_id": team["team_id"], "team_alias": team.get("team_alias") or g})
     return out
 
 
@@ -287,7 +287,13 @@ async def _refresh(refresh_token: str, s: Settings) -> tuple[dict, dict]:
             error = body.get("error") if body else None
             if r.status_code in (400, 401) and error == "invalid_grant":
                 raise RefreshRefused()
-            logger.error("Token refresh failed (%s, %s): %s", r.status_code, error, r.text[:500])
+            # Never the raw body: a success the app can't read may still hold tokens
+            # (a form-encoded token response, say). OAuth's error fields only.
+            if body is not None:
+                detail = f"error_description={str(body.get('error_description'))[:200]!r}"
+            else:
+                detail = f"not a JSON object: {r.headers.get('content-type')!r}, {len(r.content)} bytes"
+            logger.error("Token refresh failed (%s, %s): %s", r.status_code, error, detail)
             audit("oauth_refresh_error", status=r.status_code, error=error)
             raise HTTPException(status_code=502, detail="Could not check your teams; try again")
         tokens = body
