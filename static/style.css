@@ -11,15 +11,17 @@ body {
     line-height: 1.5;
 }
 
-/* As wide as the keys table needs (at least 900px, at most the window), so the
-   title, links, header and table share one width: a wider table (long key
-   names, more columns) widens the page instead of sticking out of it. */
 .container {
-    width: fit-content;
-    min-width: min(900px, 100%);
-    max-width: 100%;
+    max-width: 900px;
     margin: 40px auto;
     padding: 0 20px;
+}
+
+/* The Keys and Usage pages' width: the same on both, so switching between them
+   doesn't move anything, and wide enough for the keys table (it wraps long key
+   names, and scrolls sideways in its box on a narrower window). */
+.container-wide {
+    max-width: 1180px;
 }
 
 /* On a window narrower than the table, the table scrolls sideways in place.
@@ -60,25 +62,32 @@ body {
     text-decoration: underline;
 }
 
-/* Three columns: the page tabs at the left, the user in the middle (centered
-   under the title, whatever the tabs' and Log out's widths), Log out at the
-   right. Narrow windows, where they don't fit in a row, wrap them centered. */
 header {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    display: flex;
+    justify-content: space-between;
     align-items: center;
     gap: 12px;
     margin-bottom: 24px;
+    flex-wrap: wrap;
 }
 
-header .page-tabs { justify-self: start; }
-header #user-email { justify-self: center; }
-header .logout-form { justify-self: end; }
+/* The Keys page header, three columns: the page tabs at the left, the user in
+   the middle (centered under the title, whatever the tabs' and Log out's
+   widths), Log out at the right. The side columns keep their content's width;
+   the user's column may shrink, and a long email wraps. Narrow windows, where
+   they don't fit in a row, wrap them centered. */
+.keys-header {
+    display: grid;
+    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+}
+
+.keys-header .page-tabs { justify-self: start; }
+.keys-header #user-email { justify-self: center; min-width: 0; overflow-wrap: anywhere; text-align: center; }
+.keys-header .logout-form { justify-self: end; }
 
 @media (max-width: 520px) {
-    header {
+    .keys-header {
         display: flex;
-        flex-wrap: wrap;
         justify-content: center;
     }
 }
