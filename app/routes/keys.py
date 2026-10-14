@@ -467,6 +467,13 @@ async def _require_current_team(request: Request, client: LiteLLMClient, info: d
     s = get_settings()
     if not (s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims"):
         return
+    # Each check is a refresh-token grant at the identity provider, so changes
+    # share key creation's hourly cap (in their own count).
+    if not limiter.check(
+        "key_change", request.state.user_id, s.RATE_LIMIT_KEY_CREATE_PER_HOUR, 3600
+    ):
+        audit("rate_limited", bucket="key_change", user=request.state.user_email)
+        raise HTTPException(status_code=429, detail="Too many key changes")
     groups = await refresh_groups(request)
     try:
         teams = await teams_for_groups(groups, client)

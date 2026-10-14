@@ -317,9 +317,10 @@ OAUTH_SCOPES=openid email profile offline_access  # Entra ID: offline_access, fo
   the teams; groups without a team are ignored.
 - **No self-join:** `/api/teams/available` and `/api/teams/join` answer 404 and
   the Join button stays hidden. `GET /api/me` reports `team_source: "claims"`.
-- **Before a key is made** the app refreshes the person's tokens (refresh-token
-  grant) and re-reads their groups, so someone taken out of a group can't make
-  keys in it from an old session. Anything uncertain fails closed:
+- **Before a key is made, changed or unblocked** the app refreshes the person's
+  tokens (refresh-token grant) and re-reads their groups, so someone taken out
+  of a group can't make or widen keys in it from an old session. Anything
+  uncertain fails closed:
   - the provider refuses the refresh (the sign-in session ended, the person was
     disabled, the refresh token was revoked): the app's session ends (401), and
     the person signs in again;
@@ -356,7 +357,9 @@ something else, a person who leaves a group keeps their keys in that team until
 the keys expire, if they expire at all (a key made without a duration never
 does), and stays a member of the LiteLLM team. The app itself refuses them new
 keys in that team, and changes or unblocking of their keys there (both re-read
-their groups first); they can still block or delete those keys.
+their groups first, so they share key creation's hourly cap,
+`RATE_LIMIT_KEY_CREATE_PER_HOUR`, in their own count); they can still block or
+delete those keys.
 
 A deployment using `TEAM_SOURCE=claims` must therefore run a reconciler beside
 the app, which periodically, for each team:

@@ -36,7 +36,7 @@ async def me(request: Request):
 
 
 async def _claim_teams(request: Request) -> tuple[list[dict], bool]:
-    """Teams from the sign-in's groups (re-checked when a key is made)."""
+    """Teams from the sign-in's groups (re-checked when a key is made or changed)."""
     if request.session.get("groups_overage"):
         return [], False  # unknown, not none: the token left them out
     try:

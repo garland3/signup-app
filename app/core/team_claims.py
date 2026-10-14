@@ -4,14 +4,16 @@ A person's teams are the groups in their sign-in claims (GROUPS_FIELD) that
 start with TEAM_GROUP_PREFIX and name a LiteLLM team, by team_alias or team_id.
 Operators create the teams; the identity provider decides who is in them.
 
-Groups are read at sign-in, and again before a key is made: the app refreshes
-the person's tokens (refresh-token grant) and re-reads the claims, so someone
-taken out of a group can't make keys in it with an old session.
+Groups are read at sign-in, and again before a key is made, changed or
+unblocked: the app refreshes the person's tokens (refresh-token grant) and
+re-reads the claims, so someone taken out of a group can't make or widen keys
+in it with an old session.
 
 Anything uncertain fails closed: a refresh the provider refuses, a refreshed
-token for someone else, no refresh token (unless TEAM_CLAIMS_MAX_AGE_SECONDS
-allows the sign-in's groups), or a token whose groups were left out because
-there are too many of them (Entra ID's "groups overage").
+token for someone else, no refresh token (unless the sign-in's groups are
+recent: SIGN_IN_GRACE_SECONDS or TEAM_CLAIMS_MAX_AGE_SECONDS), or a token whose
+groups were left out because there are too many of them (Entra ID's "groups
+overage").
 
 This app doesn't remove people from LiteLLM teams, or delete their keys, when
 they leave a group: it only acts when someone uses it. A reconciler outside it
@@ -233,6 +235,9 @@ async def _refresh_task(key: str, refresh_token: str, s: Settings, session: dict
     try:
         tokens, claims = await _refresh(refresh_token, s)
         _recent[key] = (time.monotonic(), (tokens, claims))
+        # The session dict is the store's own (the in-memory store hands it out by
+        # reference), so this write is kept even if the request that started the
+        # task is gone. A store that copies sessions would need its own write here.
         if tokens.get("refresh_token") and session.get("refresh_token") == refresh_token:
             session["refresh_token"] = tokens["refresh_token"]  # rotated
         return tokens, claims
@@ -265,17 +270,20 @@ async def _refresh(refresh_token: str, s: Settings) -> tuple[dict, dict]:
         except httpx.RequestError:
             logger.exception("Token refresh transport error")
             raise HTTPException(status_code=502, detail="Could not check your teams; try again")
-        if r.status_code >= 400:
-            try:
-                error = r.json().get("error")
-            except ValueError:
-                error = None
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            body = None  # not JSON, or not an object: the endpoint isn't answering as OAuth
+        if r.status_code >= 400 or body is None:
+            error = body.get("error") if body else None
             if r.status_code in (400, 401) and error == "invalid_grant":
                 raise RefreshRefused()
-            logger.error("Token refresh failed (%s, %s): %s", r.status_code, error, r.text)
+            logger.error("Token refresh failed (%s, %s): %s", r.status_code, error, r.text[:500])
             audit("oauth_refresh_error", status=r.status_code, error=error)
             raise HTTPException(status_code=502, detail="Could not check your teams; try again")
-        tokens = r.json()
+        tokens = body
         if s.OAUTH_CLAIMS_SOURCE == "id_token" and not tokens.get("id_token"):
             logger.error("Token refresh returned no ID token (OAUTH_CLAIMS_SOURCE=id_token)")
             raise HTTPException(

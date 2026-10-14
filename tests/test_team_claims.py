@@ -679,3 +679,52 @@ async def test_a_group_naming_one_teams_alias_and_anothers_id_means_the_alias():
         await _sign_in(c, provider)
         me = (await c.get("/api/me")).json()
     assert [t["team_id"] for t in me["teams"]] == ["t-real"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (200, b"<html>a proxy's page</html>"),  # a 200 that isn't JSON
+        (200, b"[]"),  # JSON, but not an object
+        (500, b"<html>error</html>"),  # an error that isn't JSON
+        (400, b'"invalid_grant"'),  # an error body that isn't an object
+    ],
+)
+async def test_an_unexpected_token_endpoint_answer_is_a_502(status, body):
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        respx.post(TOKEN_URL).mock(side_effect=provider)
+        await _sign_in(c, provider)
+        respx.post(TOKEN_URL).mock(return_value=Response(status, content=body))
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+        me = await c.get("/api/me")
+    assert r.status_code == 502
+    assert me.status_code == 200  # still signed in
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_key_changes_that_re_read_groups_are_rate_limited():
+    _mock_provider()
+    _litellm()
+    routes = _key("t-alpha")
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    settings = _claims_settings(RATE_LIMIT_KEY_CREATE_PER_HOUR=2)
+    async with AsyncClient(transport=ASGITransport(app=_app(settings)), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        first = await c.patch("/api/keys/hashed-1", json={"max_budget": 100}, headers=ORIGIN)
+        second = await c.post("/api/keys/hashed-1/unblock", headers=ORIGIN)
+        refreshes = provider.refreshes
+        third = await c.patch("/api/keys/hashed-1", json={"max_budget": 200}, headers=ORIGIN)
+        block = await c.post("/api/keys/hashed-1/block", headers=ORIGIN)
+    assert first.status_code == 200 and second.status_code == 200
+    assert third.status_code == 429
+    assert provider.refreshes == refreshes  # the limited one didn't reach the provider
+    assert routes["update"].call_count == 1
+    assert block.status_code == 200  # blocking only reduces access: not limited
