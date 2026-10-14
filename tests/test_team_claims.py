@@ -240,17 +240,41 @@ async def test_refresh_for_another_person_ends_the_session():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_without_a_refresh_token_sign_in_again():
+async def test_without_a_refresh_token_signing_in_again_lets_a_key_be_made(monkeypatch):
+    """No sign-in loop: a fresh sign-in's groups are accepted; older ones need a
+    new sign-in (401), after which the key can be made."""
     _mock_provider()
     _, generate = _litellm()
     provider = Provider(GROUPS, refresh_token=None)
     respx.post(TOKEN_URL).mock(side_effect=provider)
+    clock = [team_claims._now()]
+    monkeypatch.setattr(team_claims, "_now", lambda: clock[0])
     async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
         await _sign_in(c, provider)
-        r = await c.post("/api/keys", json={"name": "k", "team_id": "project-general"}, headers=ORIGIN)
-    assert r.status_code == 401  # the sign-in's groups can't be re-checked
+        first = await c.post("/api/keys", json={"name": "k1", "team_id": "project-general"}, headers=ORIGIN)
+        clock[0] += team_claims.SIGN_IN_GRACE_SECONDS + 60
+        stale = await c.post("/api/keys", json={"name": "k2", "team_id": "project-general"}, headers=ORIGIN)
+        await _sign_in(c, provider)
+        again = await c.post("/api/keys", json={"name": "k2", "team_id": "project-general"}, headers=ORIGIN)
+    assert (first.status_code, stale.status_code, again.status_code) == (201, 401, 201)
     assert provider.refreshes == 0
-    assert not generate.called
+    assert generate.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_sign_in_without_a_refresh_token_drops_the_previous_one():
+    _mock_provider()
+    _litellm()
+    provider = Provider(GROUPS)  # the first sign-in gets a refresh token
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.refresh_token = None  # the next sign-in doesn't
+        await _sign_in(c, provider)
+        r = await c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert r.status_code == 201
+    assert provider.refreshes == 0  # the first sign-in's token wasn't used
 
 
 @pytest.mark.asyncio
@@ -571,3 +595,87 @@ async def test_a_group_without_a_team_reloads_the_teams_at_most_every_few_second
         if call.request.url.path == "/team/list" and not call.request.url.params.get("user_id")
     ]
     assert len(all_teams) == 2  # the first load, and one forced reload
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_rotated_refresh_token_is_kept():
+    _mock_provider()
+    _litellm()
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        first = await c.post("/api/keys", json={"name": "k1", "team_id": "t-alpha"}, headers=ORIGIN)
+        team_claims._recent.clear()  # no shortcut: the next refresh must use the rotated token
+        second = await c.post("/api/keys", json={"name": "k2", "team_id": "t-alpha"}, headers=ORIGIN)
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert provider.refreshes == 2  # rt-1, then rt-2 (reusing rt-1 would have been refused)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error, status", [("invalid_grant", 401), ("invalid_client", 502)])
+@respx.mock
+async def test_concurrent_requests_share_a_refused_refresh(error, status):
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+
+    async def slow_provider(request):
+        if parse_qs(request.content.decode())["grant_type"][0] == "refresh_token":
+            await asyncio.sleep(0.05)
+        return provider(request)
+
+    respx.post(TOKEN_URL).mock(side_effect=slow_provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        provider.refresh_status, provider.refresh_error = 400, error
+        a, b = await asyncio.gather(
+            c.post("/api/keys", json={"name": "k1", "team_id": "t-alpha"}, headers=ORIGIN),
+            c.post("/api/keys", json={"name": "k2", "team_id": "t-alpha"}, headers=ORIGIN),
+        )
+    assert (a.status_code, b.status_code) == (status, status)
+    assert provider.refreshes == 1
+    assert not generate.called
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_request_doesnt_cancel_the_shared_refresh(monkeypatch):
+    calls = []
+    release = asyncio.Event()
+
+    async def fake_refresh(refresh_token, s):
+        calls.append(refresh_token)
+        await release.wait()
+        return {"refresh_token": "rt-new"}, {"sub": "x"}
+
+    monkeypatch.setattr(team_claims, "_refresh", fake_refresh)
+    session = {"refresh_token": "rt-old"}
+    s = _claims_settings()
+    leader = asyncio.create_task(team_claims._refresh_shared("rt-old", s, session))
+    await asyncio.sleep(0)
+    waiter = asyncio.create_task(team_claims._refresh_shared("rt-old", s, session))
+    await asyncio.sleep(0)
+    leader.cancel()  # its client went away
+    release.set()
+    tokens, _ = await waiter
+    assert leader.cancelled()
+    assert tokens["refresh_token"] == "rt-new" and calls == ["rt-old"]
+    assert session["refresh_token"] == "rt-new"  # the rotation isn't lost
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_group_naming_one_teams_alias_and_anothers_id_means_the_alias():
+    _mock_provider()
+    teams = [
+        {"team_id": "project-alpha", "team_alias": "legacy"},
+        {"team_id": "t-real", "team_alias": "project-alpha"},
+    ]
+    respx.get(f"{LITELLM}/team/list").mock(return_value=Response(200, json=teams))
+    provider = Provider(["project-alpha"])
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        me = (await c.get("/api/me")).json()
+    assert [t["team_id"] for t in me["teams"]] == ["t-real"]

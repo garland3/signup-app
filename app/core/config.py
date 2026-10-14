@@ -32,8 +32,9 @@ class Settings(BaseSettings):
     TEAM_GROUP_PREFIX: str = "project-"
     # TEAM_SOURCE=claims: groups are re-read (refresh-token grant) before each
     # key is made. Without a refresh token the app can't re-read them, so it
-    # asks the person to sign in again, unless the groups from sign-in are
-    # younger than this many seconds (0: never trust them without a refresh).
+    # uses the groups from a sign-in younger than this many seconds, or 60
+    # (team_claims.SIGN_IN_GRACE_SECONDS), whichever is longer; older ones need
+    # a new sign-in.
     TEAM_CLAIMS_MAX_AGE_SECONDS: int = 0
     # Optional URL path prefix the app is served under (e.g. "/start").
     # When set, all routes, static assets, and auth redirects are served

@@ -46,10 +46,15 @@ _last_forced_reload = 0.0
 # provider's reuse detection (Keycloak's "Revoke Refresh Token"), refusing the
 # second and possibly ending the whole sign-in session.
 RECENT_REFRESH_SECONDS = 30
-_inflight: dict[str, asyncio.Future] = {}
+_inflight: dict[str, asyncio.Task] = {}
 _recent: dict[str, tuple[float, tuple[dict, dict]]] = {}
 
 _now = time.time  # the clock for sign-in ages; tests replace it
+
+# Without a refresh token, groups from a sign-in this recent are as fresh as a
+# refresh would give, so signing in again always lets a key be made (otherwise
+# a provider that issues no refresh token would loop: 401, sign in, 401, ...).
+SIGN_IN_GRACE_SECONDS = 60
 
 
 class RefreshRefused(Exception):
@@ -104,15 +109,26 @@ def groups_from_claims(claims: dict, settings: Settings) -> list[str]:
 
 
 async def _teams_by_name(client: LiteLLMClient, *, refresh: bool = False) -> dict[str, dict]:
+    """Teams by name: their team_alias, else their team_id. A name that is one
+    team's alias and another's ID means the alias (logged)."""
     global _teams_cache
     now = time.monotonic()
     if refresh or _teams_cache is None or now - _teams_cache[0] > TEAMS_TTL_SECONDS:
-        index: dict[str, dict] = {}
+        aliases: dict[str, dict] = {}
+        ids: dict[str, dict] = {}
         for t in await client.list_all_teams():
-            for name in (t.get("team_alias"), t.get("team_id")):
-                if isinstance(name, str) and name:
-                    index.setdefault(name, t)
-        _teams_cache = (now, index)
+            alias, team_id = t.get("team_alias"), t.get("team_id")
+            if isinstance(alias, str) and alias:
+                aliases.setdefault(alias, t)
+            if isinstance(team_id, str) and team_id:
+                ids.setdefault(team_id, t)
+        for name in aliases.keys() & ids.keys():
+            if aliases[name] is not ids[name]:
+                logger.warning(
+                    "Group %s names team %s by alias and team %s by ID; using the alias",
+                    name, aliases[name].get("team_id"), name,
+                )
+        _teams_cache = (now, {**ids, **aliases})
     return _teams_cache[1]
 
 
@@ -145,7 +161,8 @@ async def refresh_groups(request: Request) -> list[str]:
     ended, the person was disabled), the app's session ends too (401). With
     no refresh token (the provider issued none; Entra ID needs the
     offline_access scope), the person must sign in again (401), unless the
-    groups from sign-in are younger than TEAM_CLAIMS_MAX_AGE_SECONDS. A token
+    groups from sign-in are younger than SIGN_IN_GRACE_SECONDS or
+    TEAM_CLAIMS_MAX_AGE_SECONDS, whichever is longer. A token
     that leaves the groups out (overage) is refused (403). Concurrent requests
     share one refresh (_refresh_shared).
     """
@@ -154,14 +171,14 @@ async def refresh_groups(request: Request) -> list[str]:
     refresh_token = session.get("refresh_token")
     if not refresh_token:
         age = _now() - float(session.get("groups_at") or 0)
-        if s.TEAM_CLAIMS_MAX_AGE_SECONDS and age <= s.TEAM_CLAIMS_MAX_AGE_SECONDS:
+        if age <= max(SIGN_IN_GRACE_SECONDS, s.TEAM_CLAIMS_MAX_AGE_SECONDS):
             if session.get("groups_overage"):
                 raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
             return session_groups(request)
         audit("team_claims_stale", user=session.get("user_email"), age=int(age))
         raise HTTPException(status_code=401, detail="Sign in again to confirm your teams")
     try:
-        tokens, claims = await _refresh_shared(refresh_token, s)
+        tokens, claims = await _refresh_shared(refresh_token, s, session)
     except RefreshRefused:
         user = session.get("user_email")
         session.clear()
@@ -182,12 +199,15 @@ async def refresh_groups(request: Request) -> list[str]:
     return groups
 
 
-async def _refresh_shared(refresh_token: str, s: Settings) -> tuple[dict, dict]:
+async def _refresh_shared(refresh_token: str, s: Settings, session: dict) -> tuple[dict, dict]:
     """(tokens, claims) for a refresh token, refreshing it only once.
 
-    A request that arrives while another refresh of the same token is running
-    waits for it; one that arrives soon after gets its result. Each request
-    then checks the claims and updates its own session.
+    The refresh runs as a task of its own, which every request for the same
+    refresh token awaits (shielded): one that arrives while it runs waits for
+    it, one that arrives soon after gets its result. A request that goes away
+    (its client disconnected) doesn't cancel it, and the task itself writes the
+    rotated refresh token back to the session, so the provider's rotation isn't
+    lost. Each request then checks the claims and updates its own session.
     """
     key = hashlib.sha256(refresh_token.encode()).hexdigest()
     now = time.monotonic()
@@ -195,23 +215,27 @@ async def _refresh_shared(refresh_token: str, s: Settings) -> tuple[dict, dict]:
         del _recent[k]
     if key in _recent:
         return _recent[key][1]
-    if key in _inflight:
-        return await asyncio.shield(_inflight[key])
-    future: asyncio.Future = asyncio.get_running_loop().create_future()
-    _inflight[key] = future
+    task = _inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_refresh_task(key, refresh_token, s, session))
+        task.add_done_callback(_retrieve_exception)
+        _inflight[key] = task
+    return await asyncio.shield(task)
+
+
+def _retrieve_exception(task: asyncio.Task) -> None:
+    """Mark a failed refresh's exception as seen, for when no request awaits it."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _refresh_task(key: str, refresh_token: str, s: Settings, session: dict) -> tuple[dict, dict]:
     try:
-        result = await _refresh(refresh_token, s)
-    except asyncio.CancelledError:
-        future.cancel()
-        raise
-    except Exception as e:
-        future.set_exception(e)
-        future.exception()  # retrieved here, so no "never retrieved" warning without waiters
-        raise
-    else:
-        future.set_result(result)
-        _recent[key] = (time.monotonic(), result)
-        return result
+        tokens, claims = await _refresh(refresh_token, s)
+        _recent[key] = (time.monotonic(), (tokens, claims))
+        if tokens.get("refresh_token") and session.get("refresh_token") == refresh_token:
+            session["refresh_token"] = tokens["refresh_token"]  # rotated
+        return tokens, claims
     finally:
         _inflight.pop(key, None)
 

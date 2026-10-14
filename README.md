@@ -307,7 +307,8 @@ FEATURE_TEAMS_ENABLED=true
 TEAM_SOURCE=claims
 GROUPS_FIELD=groups          # the claim holding the groups; Entra ID app roles: roles
 TEAM_GROUP_PREFIX=project-   # only these groups are teams
-TEAM_CLAIMS_MAX_AGE_SECONDS=0  # without a refresh token: trust sign-in groups this long (0: never)
+TEAM_CLAIMS_MAX_AGE_SECONDS=0  # without a refresh token: trust sign-in groups this long (min. 60 s)
+OAUTH_SCOPES=openid email profile offline_access  # Entra ID: offline_access, for a refresh token
 ```
 
 - **A person's teams** are the groups in their sign-in claims that start with
@@ -329,12 +330,14 @@ TEAM_CLAIMS_MAX_AGE_SECONDS=0  # without a refresh token: trust sign-in groups t
     `/api/me` reports the teams as unavailable rather than empty. Send fewer
     groups (Entra ID: "Groups assigned to the application", or app roles);
   - **no refresh token** (the provider issued none; Entra ID issues one only with
-    the `offline_access` scope): the person must sign in again (401) to make a
-    key, so groups are never older than the sign-in that just happened. A
-    deployment that can't get refresh tokens can set
-    `TEAM_CLAIMS_MAX_AGE_SECONDS` to accept the groups from sign-in up to that
-    age: someone removed from a group can then still make keys in it for that
-    long.
+    the `offline_access` scope, so add it to `OAUTH_SCOPES`): groups from a
+    sign-in in the last 60 seconds are used, as fresh as a refresh would give.
+    Older ones need a new sign-in (401, which the page turns into one), after
+    which the key can be made. A sign-in that returns no refresh token also
+    drops any earlier sign-in's. A deployment that can't get refresh tokens can
+    set `TEAM_CLAIMS_MAX_AGE_SECONDS` to accept the groups from sign-in for
+    longer: someone removed from a group can then still make keys in it for
+    that long.
 - **LiteLLM membership follows:** before making the key the app checks whether
   the person is a member of the team (`GET /team/list?user_id=`), and adds them
   (`/team/member_add`, role `user`) if not, so the team's per-member budget

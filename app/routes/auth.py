@@ -157,6 +157,8 @@ async def callback(request: Request):
         # Teams come from the identity provider: keep the groups, and the
         # refresh token to re-read them before a key is made.
         store_groups(request.session, claims, s)
+        # A sign-in without a refresh token must not keep an earlier sign-in's.
+        request.session.pop("refresh_token", None)
         if tokens.get("refresh_token"):
             request.session["refresh_token"] = tokens["refresh_token"]
     audit("login_success", user=email, user_id=user_id)
