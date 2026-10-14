@@ -764,3 +764,64 @@ async def test_an_alias_two_teams_share_means_the_first_and_is_logged(caplog):
             me = (await c.get("/api/me")).json()
     assert [t["team_id"] for t in me["teams"]] == ["t-first"]
     assert "share the alias project-alpha" in caplog.text
+
+
+def _slow_refresh(provider, started: asyncio.Event):
+    """The token endpoint, holding each refresh until the test lets it go."""
+    release = asyncio.Event()
+
+    async def endpoint(request):
+        if parse_qs(request.content.decode())["grant_type"][0] == "refresh_token":
+            started.set()
+            await release.wait()
+        return provider(request)
+
+    return endpoint, release
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_sign_in_during_a_refresh_keeps_the_new_sign_ins_session():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    started = asyncio.Event()
+    endpoint, release = _slow_refresh(provider, started)
+    respx.post(TOKEN_URL).mock(side_effect=endpoint)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        key = asyncio.create_task(c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN))
+        await started.wait()  # the refresh with rt-1 is in flight
+        provider.refresh_token, provider.groups = "rt-new", ["project-general"]
+        await _sign_in(c, provider)  # signs in again meanwhile
+        release.set()
+        r = await key
+        me = (await c.get("/api/me")).json()
+        provider.used.clear()
+        again = await c.post("/api/keys", json={"name": "k2", "team_id": "project-general"}, headers=ORIGIN)
+    assert r.status_code == 401  # the session changed under it
+    assert [t["team_id"] for t in me["teams"]] == ["project-general"]  # the new sign-in's groups
+    assert again.status_code == 201 and "rt-new" in provider.used  # and its refresh token
+    assert generate.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_logout_during_a_refresh_stays_logged_out():
+    _mock_provider()
+    _, generate = _litellm()
+    provider = Provider(GROUPS)
+    started = asyncio.Event()
+    endpoint, release = _slow_refresh(provider, started)
+    respx.post(TOKEN_URL).mock(side_effect=endpoint)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        key = asyncio.create_task(c.post("/api/keys", json={"name": "k", "team_id": "t-alpha"}, headers=ORIGIN))
+        await started.wait()
+        await c.post("/api/auth/logout", headers=ORIGIN, follow_redirects=False)
+        release.set()
+        r = await key
+        me = await c.get("/api/me")
+    assert r.status_code == 401
+    assert me.status_code == 401  # nothing wrote the session back
+    assert not generate.called

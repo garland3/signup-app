@@ -186,9 +186,14 @@ async def refresh_groups(request: Request) -> list[str]:
         tokens, claims = await _refresh_shared(refresh_token, s, session)
     except RefreshRefused:
         user = session.get("user_email")
-        session.clear()
+        if session.get("refresh_token") == refresh_token:  # not a newer sign-in's session
+            session.clear()
         audit("oauth_refresh_refused", user=user)
         raise HTTPException(status_code=401, detail="Your sign-in has ended; sign in again")
+    # A sign-in or logout while the refresh ran replaced the session (the refresh
+    # task writes back only the rotated token): leave the newer state alone.
+    if session.get("refresh_token") not in {refresh_token, tokens.get("refresh_token")} - {None}:
+        raise HTTPException(status_code=401, detail="Your sign-in changed; sign in again")
     # The refreshed claims must still be this person.
     field = s.OAUTH_USER_ID_FIELD or s.OAUTH_EMAIL_FIELD
     expected = session.get("user_id") if s.OAUTH_USER_ID_FIELD else session.get("user_email")
@@ -197,9 +202,7 @@ async def refresh_groups(request: Request) -> list[str]:
         session.clear()
         audit("oauth_refresh_other_user", user=user, field=field)
         raise HTTPException(status_code=401, detail="Your sign-in has ended; sign in again")
-    groups = store_groups(session, claims, s)
-    if tokens.get("refresh_token"):
-        session["refresh_token"] = tokens["refresh_token"]  # rotated
+    groups = store_groups(session, claims, s)  # the rotated token: written by the task
     if session["groups_overage"]:
         audit("team_claims_overage", user=session.get("user_email"))
         raise HTTPException(status_code=403, detail=OVERAGE_DETAIL)
