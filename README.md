@@ -425,6 +425,9 @@ uv run uvicorn mocks.litellm_mock:app --port 4000
 
 Admin key: `sk-mock-admin-key`
 
+Like LiteLLM, the mock pages `/key/list`: 10 keys a page unless asked for more
+(at most 100), newest first. The app reads every page.
+
 The mock also implements the team endpoints and seeds two empty teams
 (`team-alpha`, `team-beta`), all offered for self-join, which is useful
 for trying the teams feature locally but not representative of a real

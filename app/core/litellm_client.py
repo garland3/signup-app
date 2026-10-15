@@ -6,6 +6,13 @@ from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
+# /key/list paging: LiteLLM's largest page (size <= 100), and a cap on pages
+# (1,000 keys). Deleted keys stay listed, so a user can pile them up; the cap
+# bounds what one page load asks of LiteLLM, and stops a proxy that
+# misreports total_pages from looping forever.
+KEY_LIST_PAGE_SIZE = 100
+KEY_LIST_MAX_PAGES = 10
+
 
 class DuplicateKeyAliasError(Exception):
     """Raised when LiteLLM rejects a key because the alias is already taken.
@@ -185,14 +192,50 @@ class LiteLLMClient:
         return r.json()
 
     async def list_keys(self, user_id: str) -> dict:
-        """GET /key/list?user_id=..."""
-        r = await self._client().get(
-            "/key/list",
-            params={"user_id": user_id, "return_full_object": "true"},
-            headers=self._headers(),
-        )
-        r.raise_for_status()
-        return r.json()
+        """GET /key/list?user_id=..., every page: ``{"keys": [...]}``.
+
+        LiteLLM pages the list (10 keys by default), so this asks for its
+        largest page, newest first, and follows ``total_pages``. A key that
+        shifts onto a later page while paging (a key created meanwhile) is
+        returned once. A proxy that doesn't page (no ``total_pages``) is read
+        in one request. Past ``KEY_LIST_MAX_PAGES`` the oldest keys are left
+        out, with a warning.
+        """
+        keys: list[dict] = []
+        seen: set = set()
+        page = 1
+        while True:
+            r = await self._client().get(
+                "/key/list",
+                params={
+                    "user_id": user_id,
+                    "return_full_object": "true",
+                    "page": str(page),
+                    "size": str(KEY_LIST_PAGE_SIZE),
+                    "sort_by": "created_at",
+                    "sort_order": "desc",
+                },
+                headers=self._headers(),
+            )
+            r.raise_for_status()
+            data = r.json()
+            batch = data if isinstance(data, list) else data.get("keys") or []
+            for k in batch:
+                token = k.get("token") if isinstance(k, dict) else k
+                if token is None or token not in seen:
+                    seen.add(token)
+                    keys.append(k)
+            total_pages = data.get("total_pages") if isinstance(data, dict) else None
+            if not isinstance(total_pages, int) or page >= total_pages or not batch:
+                break
+            if page >= KEY_LIST_MAX_PAGES:
+                logger.warning(
+                    "key list for %s stopped at %d pages of %d (of %d)",
+                    user_id, page, KEY_LIST_PAGE_SIZE, total_pages,
+                )
+                break
+            page += 1
+        return {"keys": keys}
 
     async def get_key_info(self, key: str) -> dict:
         """GET /key/info?key=..."""
