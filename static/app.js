@@ -345,7 +345,7 @@ function renderKeys() {
     tbody.textContent = "";
     currentKeys.forEach(function(k) {
         var tr = document.createElement("tr");
-        appendCell(tr, k.name);
+        appendCell(tr, k.display_name || k.name);
         if (teamsEnabled) appendCell(tr, teamLabel(k)).className = "team-cell";
 
         var prefixCell = document.createElement("td");

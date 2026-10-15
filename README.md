@@ -54,6 +54,29 @@ User -> Reverse Proxy -> Signup App -> LiteLLM Proxy
 
 The app holds a single admin key (`LITELLM_ADMIN_KEY`) to manage keys on behalf of users. Users are scoped by email via LiteLLM's `user_id` field.
 
+### Key names
+
+Every key the app makes is named `<user>-<name>` in LiteLLM (its alias), so
+names are unique across users. The keys table and the Usage page show the
+`<name>` part only; set `HIDE_KEY_NAME_PREFIX=false` to show the full alias. The
+API's `name` is the full alias either way, with the shown name in
+`display_name`. Keys made outside the app, whose names don't start with the
+prefix, are shown as they are.
+
+### Hidden keys
+
+Other tools may make keys for a user that the user has no use for, such as a
+gateway's short-lived session keys. Marking such a key `"hidden": true` in its
+metadata (the JSON boolean) leaves it out of the app:
+
+- it isn't listed, and doesn't count toward `MAX_ACTIVE_KEYS_PER_USER`;
+- it can't be changed, blocked or deleted through the app (404, as for
+  someone else's key);
+- its usage still counts on the Usage page, under its own name.
+
+`hidden` is reserved, like `deleted_at`: users' metadata can't set it, and
+`REQUIRED_KEY_METADATA` can't ask for it.
+
 ## Key lifetimes (`MAX_KEY_DURATION`)
 
 `MAX_KEY_DURATION` (e.g. `90d`; units `s`, `m`, `h`, `d`, `mo`) caps the duration a key

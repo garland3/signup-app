@@ -2,10 +2,10 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings
 
-# Key metadata the app writes itself (the duration shown in the UI, and
-# Delete's marker): users' metadata can't set it, and REQUIRED_KEY_METADATA
-# can't ask for it.
-RESERVED_KEY_METADATA = ("duration", "deleted_at")
+# Key metadata the app writes or reads itself (the duration shown in the UI,
+# Delete's marker, and "hidden", set by other tools on keys the app leaves
+# out): users' metadata can't set it, and REQUIRED_KEY_METADATA can't ask for it.
+RESERVED_KEY_METADATA = ("duration", "deleted_at", "hidden")
 
 
 class Settings(BaseSettings):
@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     SHOW_BUDGET_COLUMN: bool = True
     # Show the project/task usage breakdown on the usage dashboard.
     SHOW_PROJECT_TASK_BREAKDOWN: bool = True
+    # Show key names without the "<user>-" prefix every key name starts with
+    # (display only: the key's alias in LiteLLM keeps it).
+    HIDE_KEY_NAME_PREFIX: bool = True
 
     # Custom navigation links shown in the page header. Format is a
     # comma-separated list of "Name|URL" pairs, e.g.
@@ -205,6 +208,15 @@ class Settings(BaseSettings):
         capital ("projects"); otherwise as written ("SIGs", "Cost Center")."""
         word = self.team_label(plural)
         return word.lower() if word[1:] == word[1:].lower() else word
+
+    def key_display_name(self, name: str, user_email: str) -> str:
+        """A key's name as shown: without the "<user>-" prefix the app puts on
+        every key name, with HIDE_KEY_NAME_PREFIX. Names without it (keys made
+        outside the app) are shown as they are."""
+        prefix = f"{user_email}-"
+        if self.HIDE_KEY_NAME_PREFIX and user_email and name.startswith(prefix) and name != prefix:
+            return name[len(prefix):]
+        return name
 
     @property
     def oauth_scope_list(self) -> list[str]:

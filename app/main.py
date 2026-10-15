@@ -81,7 +81,7 @@ def _enforce_startup_safety(settings) -> None:
     if reserved:
         problems.append(
             f"REQUIRED_KEY_METADATA lists {', '.join(reserved)}, which the app "
-            "writes itself and users can't set, so every key creation would fail"
+            "reserves and users can't set, so every key creation would fail"
         )
 
     if settings.MAX_KEY_DURATION:
