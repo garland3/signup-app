@@ -72,16 +72,21 @@ def _mask_key(token: str) -> str:
     return token[:8] + "..." if len(token) > 8 else token
 
 
-def _format_key_response(key_data: dict, include_full_key: str | None = None) -> dict:
+def _format_key_response(
+    key_data: dict, include_full_key: str | None = None, *, user_email: str = ""
+) -> dict:
     """Format a LiteLLM key object for the frontend.
 
     Never includes the full key unless include_full_key is explicitly passed
-    (only at creation time).
+    (only at creation time). ``display_name`` is the name as the page shows it
+    (HIDE_KEY_NAME_PREFIX); ``name`` is the alias as stored.
     """
     metadata = key_data.get("metadata") or {}
+    name = key_data.get("key_alias") or key_data.get("key_name", "")
     data = {
         "id": key_data.get("token_id", key_data.get("token", "")),
-        "name": key_data.get("key_alias") or key_data.get("key_name", ""),
+        "name": name,
+        "display_name": get_settings().key_display_name(name, user_email),
         "prefix": _mask_key(
             key_data.get("token", key_data.get("key", ""))
         ),
@@ -146,6 +151,17 @@ def _is_deleted(info: dict) -> bool:
     if not isinstance(meta, dict) or not _is_expired(info.get("expires")):
         return False
     return bool(meta.get("deleted_at")) or meta.get("duration") == "0s"
+
+
+def _is_hidden(info: dict) -> bool:
+    """Whether the key is marked ``"hidden": true`` in its metadata, by tools
+    that make keys for a user which the user has no use for (a gateway's
+    short-lived session keys). The app leaves such keys out: they aren't
+    listed, don't count toward MAX_ACTIVE_KEYS_PER_USER, and can't be changed,
+    blocked or deleted through it. Only the JSON boolean counts: users'
+    metadata is strings, so no key a user made is hidden."""
+    meta = info.get("metadata")
+    return isinstance(meta, dict) and meta.get("hidden") is True
 
 
 def _validate_duration(value: str) -> None:
@@ -243,7 +259,7 @@ async def _verify_key_ownership(
     info = key_info.get("info", key_info)
     key_owner = info.get("user_id", "")
 
-    if key_owner != user_id:
+    if key_owner != user_id or _is_hidden(info):
         raise HTTPException(status_code=404, detail="Key not found")
 
     return info
@@ -317,6 +333,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
         active_count = sum(
             1 for k in keys
             if not k.get("blocked", False) and not _is_expired(k.get("expires"))
+            and not _is_hidden(k)
         )
         if active_count >= settings.MAX_ACTIVE_KEYS_PER_USER:
             raise HTTPException(
@@ -434,13 +451,14 @@ async def create_key(body: CreateKeyRequest, request: Request):
         max_budget=body.max_budget,
         duration=duration,
     )
-    return _format_key_response(result, include_full_key=full_key)
+    return _format_key_response(result, include_full_key=full_key, user_email=user_email)
 
 
 @router.get("/keys")
 async def list_keys(request: Request):
     client = _get_client()
     user_id = request.state.user_id
+    user_email = request.state.user_email
 
     try:
         result = await client.list_keys(user_id=user_id)
@@ -448,7 +466,9 @@ async def list_keys(request: Request):
         raise _upstream_error("list_keys", e)
 
     keys = result if isinstance(result, list) else result.get("keys", [])
-    formatted = [_format_key_response(k) for k in keys]
+    formatted = [
+        _format_key_response(k, user_email=user_email) for k in keys if not _is_hidden(k)
+    ]
     # Active keys at top, then inactive; stable sort by created_at desc within
     formatted.sort(
         key=lambda k: (0 if k["is_active"] else 1, _neg_created(k["created_at"]))
@@ -562,7 +582,7 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
         key_id=token,
         changed=sorted(kwargs.keys()),
     )
-    return _format_key_response(result)
+    return _format_key_response(result, user_email=user_email)
 
 
 @router.delete("/keys/{token}")
@@ -607,7 +627,7 @@ async def block_key(token: str, request: Request):
         raise _upstream_error("block_key", e)
 
     audit("key_block", user=user_email, key_id=token)
-    return _format_key_response(result)
+    return _format_key_response(result, user_email=user_email)
 
 
 @router.post("/keys/{token}/unblock")
@@ -626,4 +646,4 @@ async def unblock_key(token: str, request: Request):
         raise _upstream_error("unblock_key", e)
 
     audit("key_unblock", user=user_email, key_id=token)
-    return _format_key_response(result)
+    return _format_key_response(result, user_email=user_email)

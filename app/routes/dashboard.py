@@ -94,4 +94,7 @@ async def get_dashboard(
         period_days=period_days,
     )
     payload["user_email"] = user_email
+    settings = get_settings()
+    for k in payload.get("keys", []):
+        k["display_name"] = settings.key_display_name(k.get("alias") or "", user_email)
     return payload

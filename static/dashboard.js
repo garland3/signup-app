@@ -392,7 +392,7 @@ function renderKeys(d) {
     }
     keys.forEach(function(k) {
         var tr = document.createElement("tr");
-        appendCell(tr, k.alias || "(unknown)");
+        appendCell(tr, k.display_name || k.alias || "(unknown)");
         var prefixCell = document.createElement("td");
         var span = document.createElement("span");
         span.className = "key-prefix";

@@ -1462,7 +1462,7 @@ async def test_a_marker_on_a_live_key_doesnt_make_it_deleted(app, metadata):
     assert update.called
 
 
-@pytest.mark.parametrize("required", ["duration", "project,deleted_at"])
+@pytest.mark.parametrize("required", ["duration", "project,deleted_at", "hidden"])
 def test_startup_refuses_reserved_names_in_required_metadata(required):
     from app.core.config import Settings
     from app.main import _enforce_startup_safety
