@@ -1,6 +1,7 @@
 """Every key, not LiteLLM's first page: /key/list is paged (10 keys by default)."""
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 import respx
 from httpx import ASGITransport, AsyncClient, Response
@@ -180,3 +181,30 @@ async def test_the_usage_page_names_keys_from_every_page(app):
         r = await c.get("/api/dashboard", headers=AUTH)
     assert r.status_code == 200
     assert [k["alias"] for k in r.json()["keys"]] == [last["key_alias"]]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_failed_later_page_fails_the_list(app, monkeypatch):
+    """A page that fails isn't skipped: the list fails, and key creation, which
+    counts active keys, is refused rather than undercounting."""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "MAX_ACTIVE_KEYS_PER_USER", 500)
+    keys = _keys(150)
+
+    def endpoint(request):
+        if request.url.params["page"] == "2":
+            return Response(500, json={"error": "boom"})
+        return Response(200, json={"keys": keys[:100], "total_pages": 2})
+
+    respx.get(f"{LITELLM}/key/list").mock(side_effect=endpoint)
+    respx.get(f"{LITELLM}/user/info").mock(return_value=Response(200, json={"user_id": "alice@example.com"}))
+    generate = respx.post(f"{LITELLM}/key/generate").mock(return_value=Response(200, json={"key": "sk-new"}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client().list_keys("alice@example.com")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        listed = await c.get("/api/keys", headers=AUTH)
+        created = await c.post("/api/keys", json={"name": "X"}, headers=AUTH)
+    assert listed.status_code == 502 and created.status_code == 502
+    assert not generate.called
