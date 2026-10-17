@@ -85,6 +85,10 @@ async def test_member_delete_removes_their_keys_in_the_team(probe):
     r = await admin.post("/team/member_delete", json={"team_id": team_id, "user_id": user_id})
     r.raise_for_status()
     assert not _in(team_id, await client.list_teams(user_id))
-    with pytest.raises(httpx.HTTPStatusError) as e:
-        await client.get_key_info(key)
-    assert e.value.response.status_code == 404
+    # Gone: 404, or since LiteLLM 1.104 an answer from its archive of deleted keys.
+    try:
+        info = (await client.get_key_info(key))["info"]
+    except httpx.HTTPStatusError as e:
+        assert e.response.status_code == 404
+    else:
+        assert info.get("status") == "deleted"

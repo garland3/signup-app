@@ -136,6 +136,37 @@ async def test_delete_key_denied_for_other_user(app):
     assert r.status_code == 404
 
 
+@pytest.mark.parametrize("method, path, body", [
+    ("PATCH", "/api/keys/tok_abc123", {"key_alias": "New Name"}),
+    ("DELETE", "/api/keys/tok_abc123", None),
+    ("POST", "/api/keys/tok_abc123/block", None),
+    ("POST", "/api/keys/tok_abc123/unblock", None),
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_key_deleted_in_litellm_is_not_found(app, method, path, body):
+    # LiteLLM 1.104+ answers /key/info from its archive for a key it deleted.
+    respx.get(f"{LITELLM}/key/info").mock(
+        return_value=Response(200, json={"key": "tok_abc123", "info": {
+            "token": "tok_abc123",
+            "key_alias": "Alice Key",
+            "user_id": "alice@example.com",
+            "blocked": False,
+            "status": "deleted",
+        }})
+    )
+    writes = respx.post(url__regex=rf"{LITELLM}/key/(update|block|unblock)").mock(
+        return_value=Response(200, json={})
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.request(method, path, json=body, headers=AUTH)
+
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Key not found"
+    assert not writes.called
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_update_key_with_ownership_check(app):

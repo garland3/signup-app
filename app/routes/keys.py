@@ -259,7 +259,11 @@ async def _verify_key_ownership(
     info = key_info.get("info", key_info)
     key_owner = info.get("user_id", "")
 
-    if key_owner != user_id or _is_hidden(info):
+    # Since LiteLLM 1.104, /key/info also answers for a key LiteLLM itself has
+    # deleted (by /team/member_delete, say), from its archive of deleted keys.
+    # Such a key is gone: nothing can be done to it.
+    gone = info.get("status") == "deleted"
+    if key_owner != user_id or _is_hidden(info) or gone:
         raise HTTPException(status_code=404, detail="Key not found")
 
     return info
