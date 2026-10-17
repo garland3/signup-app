@@ -305,10 +305,26 @@ def _metadata_value(metadata: dict, field: str) -> str:
     return str(value).strip()
 
 
+def _lookup(table: dict, token: str):
+    """``table``'s entry for a token from the daily rollup, which is the full
+    token, while ``/key/list`` may give it masked."""
+    return table.get(token) or table.get(_masked_token(token))
+
+
 def _project_task_breakdown(
     results: list[dict],
     metadata_map: dict[str, dict],
+    team_names: dict[str, str] | None = None,
 ) -> list[dict]:
+    """Usage by project and task.
+
+    The task is a key's ``task`` metadata (the optional free-text Task), else
+    its ``task_number`` (a field REQUIRED_KEY_METADATA can ask for). With
+    ``team_names`` (team ID -> name), the project is the key's team, from the
+    daily rollup, which keeps it after the key is gone; else it's the key's
+    ``project`` metadata. A key's metadata comes only from ``/key/list``,
+    which no longer has a deleted key (a gateway deletes its session keys as
+    it replaces them)."""
     buckets: dict[tuple[str, str], dict] = {}
     for entry in results:
         breakdown = entry.get("breakdown") or {}
@@ -319,28 +335,66 @@ def _project_task_breakdown(
             if not isinstance(value, dict):
                 continue
             token_str = str(token)
-            metadata = value.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-            fallback = metadata_map.get(token_str) or metadata_map.get(
-                _masked_token(token_str)
-            )
+            rollup = value.get("metadata")
+            if not isinstance(rollup, dict):
+                rollup = {}
+            metadata = rollup
+            fallback = _lookup(metadata_map, token_str)
             if isinstance(fallback, dict):
-                metadata = {**fallback, **metadata}
-            project = _metadata_value(metadata, "project")
-            task_number = _metadata_value(metadata, "task_number")
-            if not project and not task_number:
+                metadata = {**fallback, **rollup}
+            if team_names is not None:
+                team_id = _metadata_value(rollup, "team_id")
+                project = team_names.get(team_id) or team_id
+            else:
+                project = _metadata_value(metadata, "project")
+            task = _metadata_value(metadata, "task") or _metadata_value(metadata, "task_number")
+            if not project and not task:
                 continue
-            b = buckets.setdefault((project, task_number), _zero_metrics())
+            b = buckets.setdefault((project, task), _zero_metrics())
             _add_metrics(b, value.get("metrics") or {})
 
     out: list[dict] = []
-    for (project, task_number), b in buckets.items():
+    for (project, task), b in buckets.items():
         finalized = _finalize_metrics(b)
         finalized["project"] = project
-        finalized["task_number"] = task_number
+        finalized["task"] = task
         out.append(finalized)
     out.sort(key=lambda x: x["spend"], reverse=True)
+    return out
+
+
+def _listed_tokens(keys_list: list[dict]) -> set[str]:
+    return {
+        t for k in keys_list for t in (k.get("token"), k.get("key"), k.get("token_id")) if t
+    }
+
+
+def _is_other_key(
+    entry: dict, listed: set[str], metadata_map: dict[str, dict], own_prefix: str
+) -> bool:
+    """Whether a key's usage goes in the one "Other keys" row instead of a row
+    of its own: a key the keys table leaves out (``"hidden": true``, as a
+    gateway marks its session keys), or one LiteLLM no longer has (a gateway
+    deletes its session keys as it replaces them) that the app didn't make
+    (its name lacks the ``<user>-`` prefix every key the app makes has). With
+    no prefix to go by, such a key keeps its own row."""
+    token = str(entry["key"])
+    if token in listed or _masked_token(token) in listed:
+        meta = _lookup(metadata_map, token) or {}
+        return meta.get("hidden") is True
+    return bool(own_prefix) and not str(entry.get("alias") or "").startswith(own_prefix)
+
+
+def _fold(entries: list[dict]) -> dict | None:
+    """One row's totals for ``entries`` (finalized per-key rows), or None."""
+    if not entries:
+        return None
+    acc = _zero_metrics()
+    for e in entries:
+        for field in acc:
+            acc[field] += e.get(field) or 0
+    out = _finalize_metrics(acc)
+    out["key_count"] = len(entries)
     return out
 
 
@@ -366,6 +420,8 @@ def aggregate(
     daily_activity: dict | None,
     keys_list: list[dict] | None = None,
     period_days: int = 30,
+    team_names: dict[str, str] | None = None,
+    own_key_prefix: str = "",
 ) -> dict:
     """Build the full dashboard payload from a ``/user/daily/activity`` response.
 
@@ -374,6 +430,9 @@ def aggregate(
     trailing window for the "current period" rollups; when the upstream
     fetch already used the same window, current_period == lifetime,
     which is fine — the frontend renders both independently.
+    ``team_names`` (team ID -> name) makes the project/task breakdown's
+    project the key's team, not its ``project`` metadata; ``own_key_prefix``
+    (``<user>-``) tells the keys the app made from other tools' keys.
     """
     activity = daily_activity or {}
     results = activity.get("results") or []
@@ -399,7 +458,7 @@ def aggregate(
         results, "api_keys", extract_alias=_api_key_alias
     )
     # Decorate keys with /key/list alias as a fallback, and add the
-    # masked prefix the UI renders next to the alias.
+    # masked prefix (in the API only: the page doesn't show it).
     for entry in keys_breakdown:
         token = entry["key"]
         alias = entry.get("alias") or alias_map.get(token) or alias_map.get(
@@ -411,6 +470,12 @@ def aggregate(
             if isinstance(token, str) and token.startswith("sk-")
             else token
         )
+    listed = _listed_tokens(keys_list)
+    own, other = [], []
+    for entry in keys_breakdown:
+        is_other = _is_other_key(entry, listed, metadata_map, own_key_prefix)
+        (other if is_other else own).append(entry)
+    keys_breakdown = own
 
     lifetime_totals = _totals(results)
     period_totals = _totals(period_results)
@@ -435,6 +500,7 @@ def aggregate(
         "time_series": _time_series(results),
         "models": models,
         "keys": keys_breakdown,
-        "project_task_breakdown": _project_task_breakdown(results, metadata_map),
+        "other_keys": _fold(other),
+        "project_task_breakdown": _project_task_breakdown(results, metadata_map, team_names),
         "status_codes": status_codes,
     }

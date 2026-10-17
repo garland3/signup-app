@@ -137,7 +137,8 @@ class Settings(BaseSettings):
     # Show the "Budget" column in the keys table. Independent from the
     # Spend column so deployments can surface either, both, or neither.
     SHOW_BUDGET_COLUMN: bool = True
-    # Show the project/task usage breakdown on the usage dashboard.
+    # Show the project/task usage breakdown on the usage dashboard, and offer
+    # an optional Task (task metadata) when creating a key.
     SHOW_PROJECT_TASK_BREAKDOWN: bool = True
     # Show key names without the "<user>-" prefix every key name starts with
     # (display only: the key's alias in LiteLLM keeps it).
@@ -173,6 +174,23 @@ class Settings(BaseSettings):
         return [
             f.strip() for f in self.REQUIRED_KEY_METADATA.split(",") if f.strip()
         ]
+
+    @property
+    def project_is_team(self) -> bool:
+        """Whether the Usage page's project/task breakdown takes a key's project
+        from its team: with teams, unless REQUIRED_KEY_METADATA asks people for
+        a project of their own (a charge code, say), which it then groups by."""
+        return self.FEATURE_TEAMS_ENABLED and "project" not in self.required_metadata_fields
+
+    @property
+    def optional_task(self) -> bool:
+        """Whether the key form offers an optional Task (``task`` metadata,
+        free text): with the Usage page's project/task breakdown, unless
+        REQUIRED_KEY_METADATA already asks for a task (``task`` or
+        ``task_number``)."""
+        return self.SHOW_PROJECT_TASK_BREAKDOWN and not (
+            {"task", "task_number"} & set(self.required_metadata_fields)
+        )
 
     @property
     def nav_links(self) -> list[dict[str, str]]:

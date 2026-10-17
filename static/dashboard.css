@@ -244,6 +244,11 @@
     border-bottom: none;
 }
 
+.dash-table .other-keys-row td {
+    color: #6b7280;
+    font-style: italic;
+}
+
 .status-row-success {
     color: #059669;
 }

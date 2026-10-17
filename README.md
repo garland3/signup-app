@@ -8,7 +8,7 @@ API key management UI backed by LiteLLM proxy. Authenticated users can create, v
 
 Per-user accounting view: budget cards, lifetime/current-period totals,
 daily time series, model and API-key breakdowns, and a Project/Task
-drill-down driven by `request_tags`. See
+drill-down by the keys' teams (or `project` metadata) and tasks. See
 [docs/2026-05-07-usage-dashboard.md](docs/2026-05-07-usage-dashboard.md)
 for the full schema and tag conventions.
 
@@ -72,7 +72,8 @@ metadata (the JSON boolean) leaves it out of the app:
 - it isn't listed, and doesn't count toward `MAX_ACTIVE_KEYS_PER_USER`;
 - it can't be changed, blocked or deleted through the app (404, as for
   someone else's key);
-- its usage still counts on the Usage page, under its own name.
+- its usage still counts on the Usage page, in one "Other keys" row with
+  other tools' keys.
 
 `hidden` is reserved, like `deleted_at`: users' metadata can't set it, and
 `REQUIRED_KEY_METADATA` can't ask for it.
@@ -226,10 +227,11 @@ instead of team. `TEAM_LABEL_PLURAL` gives a plural that isn't the label plus
 "s" (`Classes`, `Facilities`). The label is used as written, so
 `TEAM_LABEL=project` shows "project" in headings too. Within sentences the label is lower case, unless it has
 capitals past its first letter (`SIG`). The API keeps `team_id` and
-`/api/teams`. The Usage page's "Project / task breakdown" groups keys by their
-`project` metadata. If that metadata means something other than the teams,
-`TEAM_LABEL=Project` gives "project" two meanings; choose a different label
-there.
+`/api/teams`. With teams, the Usage page's "Project / task breakdown" groups
+keys by their team. A deployment whose project means something else (a charge
+code) lists `project` in `REQUIRED_KEY_METADATA`: people enter it, and the
+breakdown groups by that instead. `TEAM_LABEL=Project` then gives "project" two
+meanings, so choose a different label there.
 
 ### Requirements
 

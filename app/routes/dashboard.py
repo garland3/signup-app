@@ -46,12 +46,14 @@ async def get_dashboard(
 ):
     """Return the aggregated accounting dashboard payload.
 
-    Calls three LiteLLM endpoints in sequence:
+    Calls these LiteLLM endpoints in sequence:
       - ``/user/daily/activity`` for the daily spend/usage rollup
       - ``/user/info``           for budget posture
       - ``/key/list``            so the per-key breakdown can show aliases
+      - ``/team/list``           when a key's project is its team: the teams'
+                                 names
 
-    A failure on ``/user/info`` or ``/key/list`` is non-fatal: those
+    A failure on ``/user/info``, ``/key/list`` or ``/team/list`` is non-fatal: those
     endpoints contribute *labels* and *budget metadata* but the spend
     rollups still work without them. Only a failed daily-activity call
     surfaces as a 502 to the caller, since without it the dashboard has
@@ -87,14 +89,27 @@ async def get_dashboard(
     except Exception as e:
         logger.warning("list_keys failed for %s: %s", user_email, e)
 
+    # With teams, a key's project is its team.
+    settings = get_settings()
+    team_names = None
+    if settings.project_is_team:
+        team_names = {}
+        try:
+            for t in await client.list_teams(user_id=user_id):
+                if t.get("team_id"):
+                    team_names[t["team_id"]] = t.get("team_alias") or t["team_id"]
+        except Exception as e:
+            logger.warning("list_teams failed for %s: %s", user_email, e)
+
     payload = aggregate(
         user_info=user_info,
         daily_activity=daily_activity,
         keys_list=keys_list,
         period_days=period_days,
+        team_names=team_names,
+        own_key_prefix=f"{user_email}-" if user_email else "",
     )
     payload["user_email"] = user_email
-    settings = get_settings()
     for k in payload.get("keys", []):
         k["display_name"] = settings.key_display_name(k.get("alias") or "", user_email)
     return payload

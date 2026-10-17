@@ -368,7 +368,7 @@ function renderProjectTasks(d) {
         var tr = document.createElement("tr");
         tr.className = "project-row";
         appendCell(tr, row.project || "(none)");
-        appendCell(tr, row.task_number || "(none)");
+        appendCell(tr, row.task || "(none)");
         appendCellNum(tr, fmtInt(row.requests));
         appendCellNum(tr, fmtInt(row.total_tokens));
         appendCellNum(tr, fmtMoney(row.spend));
@@ -380,10 +380,11 @@ function renderKeys(d) {
     var body = $("keys-body");
     body.textContent = "";
     var keys = d.keys || [];
-    if (!keys.length) {
+    var other = d.other_keys;
+    if (!keys.length && !other) {
         var tr = document.createElement("tr");
         var td = document.createElement("td");
-        td.colSpan = 5;
+        td.colSpan = 4;
         td.className = "empty-state";
         td.textContent = "No spend recorded against any key.";
         tr.appendChild(td);
@@ -391,19 +392,25 @@ function renderKeys(d) {
         return;
     }
     keys.forEach(function(k) {
-        var tr = document.createElement("tr");
-        appendCell(tr, k.display_name || k.alias || "(unknown)");
-        var prefixCell = document.createElement("td");
-        var span = document.createElement("span");
-        span.className = "key-prefix";
-        span.textContent = k.key_prefix || "";
-        prefixCell.appendChild(span);
-        tr.appendChild(prefixCell);
-        appendCellNum(tr, fmtInt(k.requests));
-        appendCellNum(tr, fmtInt(k.total_tokens));
-        appendCellNum(tr, fmtMoney(k.spend));
-        body.appendChild(tr);
+        appendKeyRow(body, k.display_name || k.alias || "(unknown)", k);
     });
+    // Keys made by other tools (a gateway's session keys, say), in one row.
+    if (other) {
+        var n = other.key_count || 0;
+        var row = appendKeyRow(body, "Other keys (" + n + ")", other);
+        row.className = "other-keys-row";
+        row.title = "Keys made for you by other tools, which the keys page doesn't list";
+    }
+}
+
+function appendKeyRow(body, label, k) {
+    var tr = document.createElement("tr");
+    appendCell(tr, label);
+    appendCellNum(tr, fmtInt(k.requests));
+    appendCellNum(tr, fmtInt(k.total_tokens));
+    appendCellNum(tr, fmtMoney(k.spend));
+    body.appendChild(tr);
+    return tr;
 }
 
 function renderStatusCodes(d) {
