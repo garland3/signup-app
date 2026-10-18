@@ -181,6 +181,32 @@ the email. That matters when LiteLLM won't give the new user its email, which
 it keeps unique: when the account was recreated (a new ID, the same email), the
 alias is all that tells who the user is. Existing users keep their alias.
 
+#### Logging out
+
+Log out ends the app's session, then sends the browser to the provider's logout
+endpoint (OpenID Connect RP-initiated logout) with the sign-in's ID token as
+`id_token_hint`, so the provider ends its session without asking. Without that,
+the provider's single sign-on would sign the person straight back in. The
+person is then signed out of other applications that share that provider
+session too.
+
+- **The endpoint:** `OAUTH_LOGOUT_URL`, else the `end_session_endpoint` that
+  discovery names (with `OAUTH_ISSUER`). Set it when the app can't reach the
+  provider's public address, as with `OAUTH_JWKS_URL`, and when the provider
+  serves logout from another host than its issuer (Amazon Cognito, a custom
+  domain): the app then logs a warning and ends its own session only, since the
+  browser would block the redirect (below). With neither, Log out ends the
+  app's session only.
+- **Back to the app:** the provider then sends the browser to
+  `OAUTH_POST_LOGOUT_REDIRECT_URL`, by default the app's page on
+  `OAUTH_REDIRECT_URL`'s host. Register it with the provider as a post-logout
+  redirect URI (Keycloak: the client's "Valid post logout redirect URIs")
+  **before upgrading**: a provider that doesn't know it refuses the logout
+  (Keycloak: 400, "Invalid redirect uri") and shows an error page instead.
+- **The page's policy:** browsers apply the Content-Security-Policy's
+  `form-action` to a form's redirects too, so it allows the logout endpoint's
+  origin (`OAUTH_LOGOUT_URL`'s, else `OAUTH_ISSUER`'s) next to `'self'`.
+
 #### Running behind a TLS-terminating proxy (Kubernetes)
 
 By default the session cookie is marked `Secure` and only sent over HTTPS. If

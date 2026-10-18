@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse
 
 from app.core.audit import audit
 from app.core.config import Settings, get_settings
-from app.core.oidc import IdTokenError, verify_id_token
+from app.core.oidc import IdTokenError, logout_url, verify_id_token
 from app.core.team_claims import store_groups
 
 logger = logging.getLogger(__name__)
@@ -159,6 +159,12 @@ async def callback(request: Request):
         request.session["username"] = username
     else:
         request.session.pop("username", None)
+    # For the provider's logout (id_token_hint): it ends the session without
+    # asking the person to confirm.
+    if tokens.get("id_token"):
+        request.session["id_token"] = tokens["id_token"]
+    else:
+        request.session.pop("id_token", None)
     if s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims":
         # Teams come from the identity provider: keep the groups, and the
         # refresh token to re-read them before a key is made or changed.
@@ -218,12 +224,35 @@ async def claims_from_tokens(
 
 @router.post("/logout")
 async def logout(request: Request):
-    user = None
+    """End the app's session, then, in OAuth mode, the provider's: its single
+    sign-on would otherwise sign the person straight back in."""
+    s = get_settings()
+    user = id_token = None
     session = getattr(request, "session", None)
     if session is not None:
         user = session.get("user_email")
+        id_token = session.get("id_token")
         session.clear()
     audit("logout", user=user)
-    return RedirectResponse(
-        get_settings().normalized_root_path + "/", status_code=303
-    )
+    if s.AUTH_MODE == "oauth":
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            url = await logout_url(s, http)
+        back = s.post_logout_redirect_url
+        u = urlparse(url)
+        if url and f"{u.scheme}://{u.netloc}" != s.logout_form_origin:
+            # The page's CSP form-action allows only logout_form_origin: the
+            # browser would block this redirect, and Log out would seem to do
+            # nothing. Discovery named a logout on another host than the issuer.
+            logger.warning(
+                "the provider's logout endpoint %s isn't on %s, which the page allows; "
+                "set OAUTH_LOGOUT_URL to it. Log out ends the app's session only.",
+                url, s.logout_form_origin,
+            )
+            url = ""
+        if url and back:
+            params = {"client_id": s.OAUTH_CLIENT_ID, "post_logout_redirect_uri": back}
+            if id_token:
+                params["id_token_hint"] = id_token
+            sep = "&" if "?" in url else "?"
+            return RedirectResponse(f"{url}{sep}{urlencode(params)}", status_code=303)
+    return RedirectResponse(s.normalized_root_path + "/", status_code=303)

@@ -7,6 +7,7 @@ expiry and the nonce sent with the authorization request.
 """
 from __future__ import annotations
 
+import logging
 import time
 
 import httpx
@@ -21,7 +22,9 @@ LEEWAY_SECONDS = 60
 KEYS_TTL_SECONDS = 300
 _REFETCH_MIN_SECONDS = 10
 
-_jwks_url_cache: dict[str, str] = {}  # issuer -> discovered jwks_uri
+logger = logging.getLogger(__name__)
+
+_discovery_cache: dict[str, dict] = {}  # issuer -> discovery document
 _keys_cache: dict[str, tuple[float, dict]] = {}  # jwks URL -> (fetched at, {kid: PyJWK})
 
 
@@ -31,24 +34,47 @@ class IdTokenError(Exception):
 
 def reset_caches() -> None:
     """For tests."""
-    _jwks_url_cache.clear()
+    _discovery_cache.clear()
     _keys_cache.clear()
+
+
+async def _discovery(settings: Settings, http: httpx.AsyncClient) -> dict:
+    """The issuer's discovery document (<issuer>/.well-known/openid-configuration)."""
+    issuer = settings.OAUTH_ISSUER.rstrip("/")
+    doc = _discovery_cache.get(issuer)
+    if doc is None:
+        r = await http.get(f"{issuer}/.well-known/openid-configuration")
+        r.raise_for_status()
+        doc = r.json()
+        if not isinstance(doc, dict):  # not cached: the next sign-in tries again
+            raise IdTokenError("the provider's discovery document isn't a JSON object")
+        _discovery_cache[issuer] = doc
+    return doc
 
 
 async def _jwks_url(settings: Settings, http: httpx.AsyncClient) -> str:
     if settings.OAUTH_JWKS_URL:
         return settings.OAUTH_JWKS_URL
-    issuer = settings.OAUTH_ISSUER.rstrip("/")
-    url = _jwks_url_cache.get(issuer)
-    if url:
-        return url
-    r = await http.get(f"{issuer}/.well-known/openid-configuration")
-    r.raise_for_status()
-    url = r.json().get("jwks_uri")
+    url = (await _discovery(settings, http)).get("jwks_uri")
     if not url:
         raise IdTokenError("the provider's discovery document names no jwks_uri")
-    _jwks_url_cache[issuer] = url
     return url
+
+
+async def logout_url(settings: Settings, http: httpx.AsyncClient) -> str:
+    """The provider's logout endpoint: OAUTH_LOGOUT_URL, else the
+    end_session_endpoint discovery names (with OAUTH_ISSUER). Empty when there
+    is none, or discovery fails: Log out then ends the app's session only."""
+    if settings.OAUTH_LOGOUT_URL:
+        return settings.OAUTH_LOGOUT_URL
+    if not settings.OAUTH_ISSUER:
+        return ""
+    try:
+        url = (await _discovery(settings, http)).get("end_session_endpoint")
+    except (httpx.HTTPError, ValueError, IdTokenError) as e:
+        logger.warning("discovery failed, so Log out ends the app's session only: %s", e)
+        return ""
+    return url if isinstance(url, str) else ""
 
 
 async def _signing_key(kid: str | None, settings: Settings, http: httpx.AsyncClient):

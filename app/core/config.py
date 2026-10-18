@@ -1,4 +1,5 @@
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
 
@@ -96,6 +97,16 @@ class Settings(BaseSettings):
     # Signing keys (JWKS) URL, if not the one discovery names; e.g. an
     # in-cluster address for a provider whose public URL the app can't reach.
     OAUTH_JWKS_URL: str = ""
+    # The provider's logout endpoint (OpenID Connect RP-initiated logout). Log
+    # out sends the browser there after ending the app's session, so that the
+    # provider ends its session too: otherwise its single sign-on signs the
+    # person straight back in. Empty: the end_session_endpoint that discovery
+    # names (with OAUTH_ISSUER); with neither, Log out ends the app's session only.
+    OAUTH_LOGOUT_URL: str = ""
+    # Where the provider sends the browser after logging out; register it with
+    # the provider as a post-logout redirect URI. Empty: the app's own page, on
+    # OAUTH_REDIRECT_URL's host.
+    OAUTH_POST_LOGOUT_REDIRECT_URL: str = ""
     # Claim that identifies the user in LiteLLM (its user_id), e.g. "sub" or
     # Entra's "oid". Empty: the email, as before. Set it when emails can
     # change or be reused; the email is then stored as the user's email.
@@ -294,6 +305,28 @@ class Settings(BaseSettings):
                 netloc = f"{netloc}:{parsed.port}"
             out.append(f"{parsed.scheme.lower()}://{netloc}")
         return out
+
+    @property
+    def post_logout_redirect_url(self) -> str:
+        """OAUTH_POST_LOGOUT_REDIRECT_URL, else the app's page on
+        OAUTH_REDIRECT_URL's scheme and host; empty without either."""
+        if self.OAUTH_POST_LOGOUT_REDIRECT_URL:
+            return self.OAUTH_POST_LOGOUT_REDIRECT_URL
+        u = urlparse(self.OAUTH_REDIRECT_URL)
+        if not u.scheme or not u.netloc:
+            return ""
+        return f"{u.scheme}://{u.netloc}{self.normalized_root_path}/"
+
+    @property
+    def logout_form_origin(self) -> str:
+        """The origin Log out's form is redirected to: browsers apply the page's
+        CSP form-action to a form's redirects too, so it must allow it. The
+        provider's logout endpoint's (OAUTH_LOGOUT_URL), else the issuer's, which
+        serves discovery's end_session_endpoint; empty without AUTH_MODE=oauth."""
+        if self.AUTH_MODE != "oauth":
+            return ""
+        u = urlparse(self.OAUTH_LOGOUT_URL or self.OAUTH_ISSUER)
+        return f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else ""
 
     @property
     def normalized_root_path(self) -> str:
