@@ -142,8 +142,12 @@ async def test_dashboard_returns_aggregated_payload(app):
             "budget_reset_at": "2026-06-01T00:00:00Z",
         })
     )
+    # Live keys, so they get rows of their own although made outside the app.
     respx.get(f"{LITELLM}/key/list").mock(
-        return_value=Response(200, json=[])
+        return_value=Response(200, json=[
+            {"token": "sk-aaa11111aaaaaaaa", "key_alias": "alice-prod"},
+            {"token": "sk-bbb22222bbbbbbbb", "key_alias": "alice-research"},
+        ])
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -178,7 +182,7 @@ async def test_dashboard_returns_aggregated_payload(app):
 
     # Project/task breakdown is derived from key metadata when present.
     project_tasks = {
-        (row["project"], row["task_number"]) for row in data["project_task_breakdown"]
+        (row["project"], row["task"]) for row in data["project_task_breakdown"]
     }
     assert ("phoenix", "T-42") in project_tasks
     assert ("atlas", "A-1") in project_tasks

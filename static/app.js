@@ -140,28 +140,36 @@ function renderMetadataHeaders() {
         th.parentNode.removeChild(th);
     });
     // Insert metadata headers before the last (actions) column
-    var fields = appConfig.required_metadata || [];
     var lastTh = head.lastElementChild;
-    fields.forEach(function(f) {
+    metadataColumns().forEach(function(c) {
         var th = document.createElement("th");
-        th.setAttribute("data-meta", f);
-        th.textContent = prettyLabel(f);
+        th.setAttribute("data-meta", c.field);
+        th.textContent = c.label;
         head.insertBefore(th, lastTh);
     });
+}
+
+// The metadata a key is made with, and shown with in the keys table: the
+// required fields, then the optional Task (free text) when it's offered.
+function metadataColumns() {
+    var cols = (appConfig.required_metadata || []).map(function(f) {
+        return {field: f, label: prettyLabel(f), required: true};
+    });
+    if (appConfig.optional_task) cols.push({field: "task", label: "Task", required: false});
+    return cols;
 }
 
 function renderMetadataInputs() {
     var container = document.getElementById("required-metadata-fields");
     container.textContent = "";
-    var fields = appConfig.required_metadata || [];
-    fields.forEach(function(f) {
+    metadataColumns().forEach(function(c) {
         var label = document.createElement("label");
-        label.setAttribute("for", "meta-" + f);
-        label.textContent = prettyLabel(f) + " (required)";
+        label.setAttribute("for", "meta-" + c.field);
+        label.textContent = c.label + (c.required ? " (required)" : " (optional)");
         var input = document.createElement("input");
         input.type = "text";
-        input.id = "meta-" + f;
-        input.setAttribute("data-meta-field", f);
+        input.id = "meta-" + c.field;
+        input.setAttribute("data-meta-field", c.field);
         container.appendChild(label);
         container.appendChild(input);
     });
@@ -338,7 +346,7 @@ function renderKeys() {
     tableBox.classList.remove("hidden");
     noKeys.classList.add("hidden");
 
-    var metaFields = appConfig.required_metadata || [];
+    var metaFields = metadataColumns().map(function(c) { return c.field; });
 
     // Rebuild rows using DOM APIs rather than HTML concatenation so no
     // untrusted value ever enters an HTML/JS parsing context.
@@ -406,8 +414,8 @@ function showCreateModal() {
     document.getElementById("key-duration").value = "";
     renderDurationHint();
     document.getElementById("key-budget").value = "";
-    (appConfig.required_metadata || []).forEach(function(f) {
-        var el = document.getElementById("meta-" + f);
+    metadataColumns().forEach(function(c) {
+        var el = document.getElementById("meta-" + c.field);
         if (el) el.value = "";
     });
     renderTeamSelect();
@@ -515,13 +523,13 @@ async function createKey() {
 
     var metadata = {};
     var missing = [];
-    (appConfig.required_metadata || []).forEach(function(f) {
-        var el = document.getElementById("meta-" + f);
+    metadataColumns().forEach(function(c) {
+        var el = document.getElementById("meta-" + c.field);
         var v = el ? el.value.trim() : "";
-        if (!v) {
-            missing.push(prettyLabel(f));
-        } else {
-            metadata[f] = v;
+        if (v) {
+            metadata[c.field] = v;
+        } else if (c.required) {
+            missing.push(c.label);
         }
     });
     if (missing.length > 0) {

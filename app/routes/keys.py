@@ -65,11 +65,18 @@ class UpdateKeyRequest(BaseModel):
     metadata: dict[str, str] | None = None
 
 
-def _mask_key(token: str) -> str:
-    """Show first 8 chars + '...' for display."""
-    if not token:
-        return ""
-    return token[:8] + "..." if len(token) > 8 else token
+def _key_hint(key_data: dict, full_key: str | None = None) -> str:
+    """What the keys table shows of a key: LiteLLM's ``key_name``, "sk-..."
+    and the key's last four characters, which the owner can match against the
+    key they hold. LiteLLM keeps nothing else of the key but its hash
+    (``token``), which matches nothing they've seen. At creation, the full key
+    gives the same; without either (LiteLLM's DISABLE_KEY_NAME), nothing."""
+    name = key_data.get("key_name")
+    if isinstance(name, str) and name.startswith("sk-..."):
+        return name
+    if full_key and len(full_key) > 8:
+        return f"sk-...{full_key[-4:]}"
+    return ""
 
 
 def _format_key_response(
@@ -87,9 +94,7 @@ def _format_key_response(
         "id": key_data.get("token_id", key_data.get("token", "")),
         "name": name,
         "display_name": get_settings().key_display_name(name, user_email),
-        "prefix": _mask_key(
-            key_data.get("token", key_data.get("key", ""))
-        ),
+        "prefix": _key_hint(key_data, include_full_key),
         "created_at": key_data.get("created_at", ""),
         "expires": key_data.get("expires", ""),
         "duration": metadata.get("duration", "") if isinstance(metadata, dict) else "",
@@ -281,6 +286,7 @@ async def get_config():
         "show_spend": s.SHOW_SPEND_COLUMN,
         "show_budget": s.SHOW_BUDGET_COLUMN,
         "show_project_task_breakdown": s.SHOW_PROJECT_TASK_BREAKDOWN,
+        "optional_task": s.optional_task,
         "team_label": s.team_label(),
         "team_label_plural": s.team_label(plural=True),
     }

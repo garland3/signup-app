@@ -201,7 +201,7 @@ def test_aggregate_project_task_breakdown_from_key_metadata():
         )
     ]
     out = aggregate(user_info=None, daily_activity=_activity(results))
-    by_task = {row["task_number"]: row for row in out["project_task_breakdown"]}
+    by_task = {row["task"]: row for row in out["project_task_breakdown"]}
     assert by_task["T-42"]["project"] == "phoenix"
     assert by_task["T-42"]["spend"] == pytest.approx(1.0)
     assert by_task["T-43"]["requests"] == 2
@@ -229,7 +229,7 @@ def test_aggregate_project_task_breakdown_backfills_from_key_list_metadata():
         user_info=None, daily_activity=_activity(results), keys_list=keys_list,
     )
     assert out["project_task_breakdown"][0]["project"] == "atlas"
-    assert out["project_task_breakdown"][0]["task_number"] == "A-1"
+    assert out["project_task_breakdown"][0]["task"] == "A-1"
 
 
 # ---------------------------------------------------------------------------

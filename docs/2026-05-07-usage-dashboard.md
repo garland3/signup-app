@@ -58,11 +58,32 @@ that didn't capture it. Keys you've deleted still show here if they
 have historical spend, so the numbers in this section always reconcile
 with the lifetime totals above.
 
+Keys other tools made for you share one **Other keys** row, with their
+count: keys marked hidden (a gateway's short-lived session keys, which
+the keys page doesn't list either), and keys LiteLLM no longer has whose
+names don't start with the `<user>-` prefix of the keys the app makes (a
+gateway deletes its session keys as it replaces them). Keys the app made
+keep their own rows, deleted or not.
+
 ### Project / task breakdown
 
-Per-project and per-task rollups derived from key metadata fields named
-`project` and `task_number`. Set `SHOW_PROJECT_TASK_BREAKDOWN=false` to
-hide this section from the Usage page.
+Per-project and per-task rollups:
+
+- **Project:** with teams (`FEATURE_TEAMS_ENABLED`), the key's team (its
+  alias, else its ID). The proxy's daily rollup keeps a key's team after
+  the key is gone, so keys LiteLLM has deleted count too (a gateway
+  deletes its session keys as it replaces them). Without teams, or with
+  `project` in `REQUIRED_KEY_METADATA` (a charge code, say), it's the
+  key's `project` metadata, which people enter.
+- **Task:** the key's `task` metadata, the optional free-text Task people
+  may enter when they create a key; else its `task_number`, a required
+  field in deployments whose `REQUIRED_KEY_METADATA` lists it.
+
+A key's metadata comes from `GET /key/list`, so a key LiteLLM has deleted
+loses its task (and, without teams, its project) here.
+
+Set `SHOW_PROJECT_TASK_BREAKDOWN=false` to hide this section from the
+Usage page, and the Task field from the key form.
 
 ### Request status
 

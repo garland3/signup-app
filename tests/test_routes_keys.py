@@ -1501,3 +1501,42 @@ def test_startup_refuses_reserved_names_in_required_metadata(required):
     s = Settings(REQUIRED_KEY_METADATA=required, FEATURE_PROXY_SECRET_ENABLED=False, ALLOW_INSECURE_STARTUP=True)
     with pytest.raises(RuntimeError, match="REQUIRED_KEY_METADATA"):
         _enforce_startup_safety(s)
+
+
+# ---------------------------------------------------------------------------
+# The Key column: LiteLLM's key_name, not the key's hash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_key_column_is_litellms_key_name(app):
+    respx.get(f"{LITELLM}/key/list").mock(return_value=Response(200, json=[
+        {"token": "a59e953c" + "0" * 56, "key_name": "sk-...Qdvg", "key_alias": "alice@example.com-a",
+         "user_id": "alice@example.com"},
+        # LiteLLM with DISABLE_KEY_NAME: nothing but the hash, which isn't shown
+        {"token": "2a5e75ce" + "0" * 56, "key_alias": "alice@example.com-b", "user_id": "alice@example.com"},
+    ]))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/keys", headers=AUTH)
+    assert {k["name"]: k["prefix"] for k in r.json()} == {
+        "alice@example.com-a": "sk-...Qdvg",
+        "alice@example.com-b": "",
+    }
+
+
+@pytest.mark.parametrize("response, shown", [
+    ({"key_name": "sk-...cdef"}, "sk-...cdef"),
+    ({}, "sk-...cdef"),  # no key_name: from the full key, shown once
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_new_keys_key_column(app, response, shown):
+    mock_ensure_user()
+    respx.post(f"{LITELLM}/key/generate").mock(return_value=Response(200, json={
+        "key": "sk-new0123456789abcdef", "token": "f" * 64, "key_alias": "alice@example.com-k", **response,
+    }))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/keys", json={"name": "k"}, headers=AUTH)
+    assert r.status_code == 201
+    assert r.json()["prefix"] == shown

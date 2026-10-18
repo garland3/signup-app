@@ -162,7 +162,7 @@ def test_key_display_name(name, user, shown):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_the_usage_page_counts_hidden_keys_and_shortens_names(app):
+async def test_the_usage_page_counts_hidden_keys_as_other_keys_and_shortens_names(app):
     from tests.test_routes_dashboard import _metrics
 
     activity = {
@@ -185,8 +185,10 @@ async def test_the_usage_page_counts_hidden_keys_and_shortens_names(app):
     _list(MINE, SESSION)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.get("/api/dashboard", headers=AUTH)
-    shown = {k["alias"]: k["display_name"] for k in r.json()["keys"]}
-    assert shown == {
-        "alice@example.com-laptop": "laptop",
-        "gw-alice-general-1760000000": "gw-alice-general-1760000000",
-    }
+    data = r.json()
+    shown = {k["alias"]: k["display_name"] for k in data["keys"]}
+    assert shown == {"alice@example.com-laptop": "laptop"}
+    # The hidden key isn't listed, but its usage still counts.
+    assert data["other_keys"]["key_count"] == 1
+    assert data["other_keys"]["spend"] == pytest.approx(0.20)
+    assert data["other_keys"]["requests"] == 2

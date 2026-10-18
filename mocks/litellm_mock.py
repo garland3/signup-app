@@ -215,7 +215,8 @@ async def generate_key(body: GenerateKeyRequest, authorization: str = Header()):
         "token": token,
         "token_id": token_id,
         "key_alias": body.key_alias,
-        "key_name": body.key_alias,
+        # As LiteLLM names a key: "sk-..." and its last four characters.
+        "key_name": f"sk-...{token[-4:]}",
         "user_id": body.user_id,
         "created_at": now,
         "expires": None,
@@ -287,7 +288,6 @@ async def update_key(body: UpdateKeyRequest, authorization: str = Header()):
 
     if body.key_alias is not None:
         record["key_alias"] = body.key_alias
-        record["key_name"] = body.key_alias
     if body.models is not None:
         record["models"] = body.models
     if body.max_budget is not None:
@@ -428,25 +428,29 @@ def _seed_daily_activity(user_id: str) -> None:
         return
     today = datetime.now(timezone.utc).date()
 
-    # (days_ago, [(model, api_key_alias, prompt, completion, spend, ok)])
+    # (days_ago, [(model, key name, prompt, completion, spend, ok)]); the key
+    # alias is "<user>-<name>", as the app names the keys it makes.
+    def _alias(name: str) -> str:
+        return f"{user_id}-{name}"
+
     samples = [
         (0, [
-            ("gpt-4o", "alice-prod", 1200, 350, 0.0182, True),
-            ("gpt-4o-mini", "alice-prod", 800, 220, 0.0024, True),
+            ("gpt-4o", "prod", 1200, 350, 0.0182, True),
+            ("gpt-4o-mini", "prod", 800, 220, 0.0024, True),
         ]),
         (1, [
-            ("gpt-4o", "alice-prod", 1500, 410, 0.0221, True),
-            ("claude-3-5-sonnet", "alice-research", 2200, 600, 0.0468, True),
+            ("gpt-4o", "prod", 1500, 410, 0.0221, True),
+            ("claude-3-5-sonnet", "research", 2200, 600, 0.0468, True),
         ]),
-        (2, [("claude-3-5-sonnet", "alice-research", 1800, 520, 0.0392, True)]),
-        (3, [("gpt-4o", "alice-prod", 900, 180, 0.0117, True)]),
-        (4, [("gpt-4o-mini", "alice-prod", 600, 140, 0.0014, True)]),
-        (5, [("gpt-4o", "alice-prod", 1100, 260, 0.0146, True)]),
-        (7, [("gpt-4o", "alice-prod", 0, 0, 0.0, False)]),
-        (10, [("gpt-4o", "alice-prod", 1400, 380, 0.0203, True)]),
-        (15, [("claude-3-5-sonnet", "alice-research", 1900, 540, 0.0408, True)]),
-        (25, [("gpt-4o-mini", "alice-prod", 500, 100, 0.0009, True)]),
-        (35, [("gpt-4o", "alice-prod", 1300, 320, 0.0173, True)]),
+        (2, [("claude-3-5-sonnet", "research", 1800, 520, 0.0392, True)]),
+        (3, [("gpt-4o", "prod", 900, 180, 0.0117, True)]),
+        (4, [("gpt-4o-mini", "prod", 600, 140, 0.0014, True)]),
+        (5, [("gpt-4o", "prod", 1100, 260, 0.0146, True)]),
+        (7, [("gpt-4o", "prod", 0, 0, 0.0, False)]),
+        (10, [("gpt-4o", "prod", 1400, 380, 0.0203, True)]),
+        (15, [("claude-3-5-sonnet", "research", 1900, 540, 0.0408, True)]),
+        (25, [("gpt-4o-mini", "prod", 500, 100, 0.0009, True)]),
+        (35, [("gpt-4o", "prod", 1300, 320, 0.0173, True)]),
     ]
 
     def _zero():
@@ -490,8 +494,8 @@ def _seed_daily_activity(user_id: str) -> None:
             ):
                 return record.get("metadata") or {}
         defaults = {
-            "alice-prod": {"project": "1042", "task_number": "3.1.2"},
-            "alice-research": {"project": "2088", "task_number": "7.4.1"},
+            "prod": {"project": "1042", "task_number": "3.1.2"},
+            "research": {"project": "2088", "task_number": "7.4.1"},
         }
         return defaults.get(alias, {})
 
@@ -513,7 +517,7 @@ def _seed_daily_activity(user_id: str) -> None:
                 {
                     "metrics": _zero(),
                     "metadata": {
-                        "key_alias": alias,
+                        "key_alias": _alias(alias),
                         **_resolve_key_metadata(alias),
                     },
                 },
