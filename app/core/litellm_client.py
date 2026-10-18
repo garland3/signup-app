@@ -140,19 +140,26 @@ class LiteLLMClient:
         r.raise_for_status()
         return r.json()
 
-    async def ensure_user(self, user_id: str, email: str | None = None) -> dict:
+    async def ensure_user(
+        self, user_id: str, email: str | None = None, username: str | None = None
+    ) -> dict:
         """Get or create a LiteLLM user.
 
         When the user ID isn't the email (OAUTH_USER_ID_FIELD), a new user also
         gets the email as its user_email; otherwise the user is created with
-        user_id = email and no user_email, as before.
+        user_id = email and no user_email, as before. A new user's user_alias,
+        the name LiteLLM's admin UI shows, is the username
+        (OAUTH_USERNAME_FIELD), else the email when the ID isn't the email:
+        the only name such a user has when its email is taken (below).
         """
         existing = await self.get_user(user_id)
         if existing is not None:
             return existing
+        alias = username or (email if email and email != user_id else None)
+        named = {"user_alias": alias} if alias else {}
         if email and email != user_id:
             try:
-                return await self.create_user(user_id, user_email=email)
+                return await self.create_user(user_id, user_email=email, **named)
             except httpx.HTTPStatusError as e:
                 # LiteLLM keeps emails unique. Another user with this email (the
                 # account was deleted and recreated, so its ID changed, or it was
@@ -164,7 +171,7 @@ class LiteLLMClient:
                     "LiteLLM user with email %s exists under another ID; creating %s without email",
                     email, user_id,
                 )
-        return await self.create_user(user_id)
+        return await self.create_user(user_id, **named)
 
     async def generate_key(
         self, user_id: str, key_alias: str, **kwargs

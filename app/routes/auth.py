@@ -153,6 +153,12 @@ async def callback(request: Request):
         request.session["user_id"] = user_id
 
     request.session["user_email"] = email
+    # The username, for the LiteLLM user the app may create (its user_alias).
+    username = claims.get(s.OAUTH_USERNAME_FIELD) if s.OAUTH_USERNAME_FIELD else None
+    if username and isinstance(username, str):
+        request.session["username"] = username
+    else:
+        request.session.pop("username", None)
     if s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims":
         # Teams come from the identity provider: keep the groups, and the
         # refresh token to re-read them before a key is made or changed.

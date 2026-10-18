@@ -102,7 +102,7 @@ async def join_team(body: JoinTeamRequest, request: Request):
 
     # Ensure the user exists in LiteLLM ("add or create") before adding them.
     try:
-        await client.ensure_user(user_id, email=user_email)
+        await client.ensure_user(user_id, email=user_email, username=request.state.username)
     except Exception as e:
         raise _upstream_error("ensure_user", e)
 

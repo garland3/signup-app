@@ -307,7 +307,8 @@ async def test_ensure_user_without_a_separate_id_keeps_the_old_shape():
         respx.get(f"{LITELLM}/user/info").mock(return_value=Response(404, json={}))
         new_user = respx.post(f"{LITELLM}/user/new").mock(return_value=Response(200, json={}))
         await LiteLLMClient(_settings()).ensure_user("alice@example.com", email="alice@example.com")
-    assert "user_email" not in json.loads(new_user.calls[0].request.content)
+    body = json.loads(new_user.calls[0].request.content)
+    assert "user_email" not in body and "user_alias" not in body
 
 
 def test_startup_refuses_id_token_claims_without_issuer():
@@ -334,6 +335,8 @@ async def test_ensure_user_with_a_taken_email_creates_the_user_without_it():
     first, second = (json.loads(c.request.content) for c in new_user.calls)
     assert first["user_email"] == "alice@example.com"
     assert second["user_id"] == "new-sub" and "user_email" not in second
+    # Without its email, only the alias names the user (here the email: no username).
+    assert first["user_alias"] == second["user_alias"] == "alice@example.com"
 
 
 @pytest.mark.asyncio
@@ -347,3 +350,45 @@ async def test_ensure_user_other_errors_still_fail():
         respx.post(f"{LITELLM}/user/new").mock(return_value=Response(500, json={"error": "boom"}))
         with pytest.raises(httpx.HTTPStatusError):
             await LiteLLMClient(_settings()).ensure_user("new-sub", email="alice@example.com")
+
+
+@pytest.mark.parametrize("claims, field, alias", [
+    ({"preferred_username": "alice"}, "preferred_username", "alice"),
+    ({}, "preferred_username", "alice@example.com"),  # no username claim: the email
+    ({"preferred_username": "alice"}, "", "alice@example.com"),  # no username field
+    ({"upn": "alice@corp.example"}, "upn", "alice@corp.example"),
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_new_user_is_named_by_the_username_claim(claims, field, alias):
+    _mock_provider()
+    respx.get(f"{LITELLM}/user/info").mock(return_value=Response(404, json={}))
+    new_user = respx.post(f"{LITELLM}/user/new").mock(return_value=Response(200, json={}))
+    respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={"key": "sk-new", "token_id": "t1", "user_id": "0b9f-sub"})
+    )
+    app = _app(_settings(OAUTH_USERNAME_FIELD=field))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        await _sign_in(c, lambda nonce: _token(claims, nonce=nonce))
+        r = await c.post("/api/keys", json={"name": "k"}, headers={"Origin": "http://test"})
+    assert r.status_code == 201
+    assert json.loads(new_user.calls[0].request.content)["user_alias"] == alias
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_existing_user_keeps_its_alias():
+    _mock_provider()
+    respx.get(f"{LITELLM}/user/info").mock(
+        return_value=Response(200, json={"user_id": "0b9f-sub", "user_info": {"user_id": "0b9f-sub"}})
+    )
+    new_user = respx.post(f"{LITELLM}/user/new").mock(return_value=Response(200, json={}))
+    update = respx.post(f"{LITELLM}/user/update").mock(return_value=Response(200, json={}))
+    respx.post(f"{LITELLM}/key/generate").mock(
+        return_value=Response(200, json={"key": "sk-new", "token_id": "t1", "user_id": "0b9f-sub"})
+    )
+    async with AsyncClient(transport=ASGITransport(app=_app(_settings())), base_url="http://test") as c:
+        await _sign_in(c, lambda nonce: _token({"preferred_username": "alice"}, nonce=nonce))
+        r = await c.post("/api/keys", json={"name": "k"}, headers={"Origin": "http://test"})
+    assert r.status_code == 201
+    assert not new_user.called and not update.called

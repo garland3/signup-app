@@ -391,7 +391,7 @@ async def create_key(body: CreateKeyRequest, request: Request):
 
     # Ensure the user exists in LiteLLM before creating a key
     try:
-        await client.ensure_user(user_id, email=user_email)
+        await client.ensure_user(user_id, email=user_email, username=request.state.username)
     except Exception as e:
         raise _upstream_error("ensure_user", e)
 
