@@ -101,9 +101,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # The user's LiteLLM user ID: the claim OAUTH_USER_ID_FIELD names (kept
         # in the session at sign-in), else the email, as before.
         user_id = user_email
+        username = None
         if self.settings.AUTH_MODE == "oauth":
             session = getattr(request, "session", None) or {}
             user_id = session.get("user_id") or user_email
+            username = session.get("username")
 
         # Per-user API rate limit. Apply after user resolution so each
         # user gets their own bucket; unauthenticated requests never
@@ -121,6 +123,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         request.state.user_email = user_email
         request.state.user_id = user_id
+        request.state.username = username
         return await call_next(request)
 
     def _resolve_proxy_user(self, request: Request):

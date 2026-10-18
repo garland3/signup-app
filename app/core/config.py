@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     # Entra's "oid". Empty: the email, as before. Set it when emails can
     # change or be reused; the email is then stored as the user's email.
     OAUTH_USER_ID_FIELD: str = ""
+    # Claim with the user's username, the name LiteLLM's admin UI shows for
+    # users the app creates (user_alias). A sign-in without one is named by
+    # its email, unless the email is the user's ID. Empty: no username.
+    OAUTH_USERNAME_FIELD: str = "preferred_username"
 
     # Session cookie (used by oauth mode)
     SESSION_SECRET: str = ""

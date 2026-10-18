@@ -175,6 +175,12 @@ LiteLLM users are then created with that ID and the email as their
 stay under their email IDs: switching a deployment that already has users moves
 them to new LiteLLM users.
 
+A user the app creates is named in LiteLLM's admin UI (its `user_alias`) by the
+username claim, `OAUTH_USERNAME_FIELD` (default `preferred_username`), else by
+the email. That matters when LiteLLM won't give the new user its email, which
+it keeps unique: when the account was recreated (a new ID, the same email), the
+alias is all that tells who the user is. Existing users keep their alias.
+
 #### Running behind a TLS-terminating proxy (Kubernetes)
 
 By default the session cookie is marked `Secure` and only sent over HTTPS. If
