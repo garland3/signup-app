@@ -287,6 +287,7 @@ async def get_config():
         "show_budget": s.SHOW_BUDGET_COLUMN,
         "show_project_task_breakdown": s.SHOW_PROJECT_TASK_BREAKDOWN,
         "optional_task": s.optional_task,
+        "team_name_prefix": s.team_name_prefix(),
         "team_label": s.team_label(),
         "team_label_plural": s.team_label(plural=True),
     }

@@ -143,6 +143,9 @@ class Settings(BaseSettings):
     # Show key names without the "<user>-" prefix every key name starts with
     # (display only: the key's alias in LiteLLM keeps it).
     HIDE_KEY_NAME_PREFIX: bool = True
+    # Show team names without TEAM_GROUP_PREFIX ("project-alpha" as "alpha"):
+    # in the keys table, the team pickers and the Usage page (display only).
+    HIDE_TEAM_NAME_PREFIX: bool = False
 
     # Custom navigation links shown in the page header. Format is a
     # comma-separated list of "Name|URL" pairs, e.g.
@@ -226,6 +229,19 @@ class Settings(BaseSettings):
         capital ("projects"); otherwise as written ("SIGs", "Cost Center")."""
         word = self.team_label(plural)
         return word.lower() if word[1:] == word[1:].lower() else word
+
+    def team_name_prefix(self) -> str:
+        """The prefix the page leaves off team names: TEAM_GROUP_PREFIX, with
+        HIDE_TEAM_NAME_PREFIX; else none."""
+        return self.TEAM_GROUP_PREFIX if self.HIDE_TEAM_NAME_PREFIX else ""
+
+    def team_display_name(self, name: str) -> str:
+        """A team's name as shown, without team_name_prefix(). A name without
+        it, or with nothing after it, is shown as it is."""
+        prefix = self.team_name_prefix()
+        if prefix and name.startswith(prefix) and name != prefix:
+            return name[len(prefix):]
+        return name
 
     def key_display_name(self, name: str, user_email: str) -> str:
         """A key's name as shown: without the "<user>-" prefix the app puts on

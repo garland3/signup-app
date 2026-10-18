@@ -112,4 +112,7 @@ async def get_dashboard(
     payload["user_email"] = user_email
     for k in payload.get("keys", []):
         k["display_name"] = settings.key_display_name(k.get("alias") or "", user_email)
+    if team_names is not None:  # the projects are teams
+        for row in payload.get("project_task_breakdown", []):
+            row["display_project"] = settings.team_display_name(row["project"])
     return payload

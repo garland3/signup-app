@@ -367,7 +367,7 @@ function renderProjectTasks(d) {
     rows.forEach(function(row) {
         var tr = document.createElement("tr");
         tr.className = "project-row";
-        appendCell(tr, row.project || "(none)");
+        appendCell(tr, row.display_project || row.project || "(none)");
         appendCell(tr, row.task || "(none)");
         appendCellNum(tr, fmtInt(row.requests));
         appendCellNum(tr, fmtInt(row.total_tokens));
