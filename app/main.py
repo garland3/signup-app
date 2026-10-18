@@ -164,6 +164,8 @@ def create_app():
         )
         # Strict CSP: no inline scripts, no remote resources. The frontend
         # loads APP_ROOT_PATH from a <meta> tag so it needs no inline JS.
+        # Log out's form redirects to the provider's logout.
+        form_action = " ".join(filter(None, ["'self'", settings.logout_form_origin]))
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
@@ -172,7 +174,7 @@ def create_app():
             "connect-src 'self'; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
-            "form-action 'self'; "
+            f"form-action {form_action}; "
             "object-src 'none'"
         )
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
