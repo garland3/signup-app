@@ -9,26 +9,33 @@ from tests.test_project_task import _activity, _dashboard
 AUTH = {"X-User-Email": "alice@example.com"}
 
 
-@pytest.mark.parametrize("hide, prefix, name, shown", [
-    (True, "project-", "project-alpha", "alpha"),
-    (True, "project-", "team-alpha", "team-alpha"),  # without the prefix: as it is
-    (True, "project-", "project-", "project-"),  # nothing after it
-    (True, "", "project-alpha", "project-alpha"),  # no prefix to hide
-    (False, "project-", "project-alpha", "project-alpha"),  # the default
+@pytest.mark.parametrize("hide, source, prefix, name, shown", [
+    (True, "claims", "project-", "project-alpha", "alpha"),
+    (True, "claims", "project-", "team-alpha", "team-alpha"),  # without the prefix: as it is
+    (True, "claims", "project-", "project-", "project-"),  # nothing after it
+    (True, "claims", "", "project-alpha", "project-alpha"),  # no prefix to hide
+    (False, "claims", "project-", "project-alpha", "project-alpha"),  # the default
+    # Teams people join in LiteLLM have names of any kind: "project-x" and "x" would clash.
+    (True, "litellm", "project-", "project-alpha", "project-alpha"),
 ])
-def test_team_display_name(hide, prefix, name, shown):
-    s = Settings(HIDE_TEAM_NAME_PREFIX=hide, TEAM_GROUP_PREFIX=prefix)
+def test_team_display_name(hide, source, prefix, name, shown):
+    s = Settings(HIDE_TEAM_NAME_PREFIX=hide, TEAM_SOURCE=source, TEAM_GROUP_PREFIX=prefix)
     assert s.team_display_name(name) == shown
 
 
-@pytest.mark.parametrize("hide, sent", [(False, ""), (True, "project-")])
+@pytest.mark.parametrize("hide, source, sent", [
+    (False, "claims", ""),
+    (True, "claims", "project-"),
+    (True, "litellm", ""),
+])
 @pytest.mark.asyncio
-async def test_the_page_gets_the_prefix_to_hide(monkeypatch, hide, sent):
+async def test_the_page_gets_the_prefix_to_hide(monkeypatch, hide, source, sent):
     from app.core.config import get_settings
     from tests.conftest import create_test_app
 
     app = create_test_app(teams_enabled=True)
     monkeypatch.setattr(get_settings(), "HIDE_TEAM_NAME_PREFIX", hide)
+    monkeypatch.setattr(get_settings(), "TEAM_SOURCE", source)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.get("/api/config", headers=AUTH)
     assert r.json()["team_name_prefix"] == sent
@@ -43,6 +50,7 @@ async def test_the_usage_pages_projects_are_shown_without_it(monkeypatch, hide, 
 
     app = create_test_app(teams_enabled=True)
     monkeypatch.setattr(get_settings(), "HIDE_TEAM_NAME_PREFIX", hide)
+    monkeypatch.setattr(get_settings(), "TEAM_SOURCE", "claims")
     activity = _activity({"tok-a": ("alice@example.com-a", "team-alpha", 0.10, 1)})
     keys = [{"token": "tok-a", "key_alias": "alice@example.com-a", "metadata": {}}]
     rows = (await _dashboard(app, activity, keys))["project_task_breakdown"]

@@ -143,8 +143,9 @@ class Settings(BaseSettings):
     # Show key names without the "<user>-" prefix every key name starts with
     # (display only: the key's alias in LiteLLM keeps it).
     HIDE_KEY_NAME_PREFIX: bool = True
-    # Show team names without TEAM_GROUP_PREFIX ("project-alpha" as "alpha"):
-    # in the keys table, the team pickers and the Usage page (display only).
+    # TEAM_SOURCE=claims: show team names without TEAM_GROUP_PREFIX
+    # ("project-alpha" as "alpha"), in the keys table, the team pickers and the
+    # Usage page (display only).
     HIDE_TEAM_NAME_PREFIX: bool = False
 
     # Custom navigation links shown in the page header. Format is a
@@ -232,8 +233,12 @@ class Settings(BaseSettings):
 
     def team_name_prefix(self) -> str:
         """The prefix the page leaves off team names: TEAM_GROUP_PREFIX, with
-        HIDE_TEAM_NAME_PREFIX; else none."""
-        return self.TEAM_GROUP_PREFIX if self.HIDE_TEAM_NAME_PREFIX else ""
+        HIDE_TEAM_NAME_PREFIX and teams from the identity provider
+        (TEAM_SOURCE=claims), whose groups all have it; else none. Teams people
+        join in LiteLLM have names of any kind: without the prefix, "project-x"
+        and "x" could look the same."""
+        hide = self.HIDE_TEAM_NAME_PREFIX and self.TEAM_SOURCE == "claims"
+        return self.TEAM_GROUP_PREFIX if hide else ""
 
     def team_display_name(self, name: str) -> str:
         """A team's name as shown, without team_name_prefix(). A name without
