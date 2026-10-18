@@ -10,6 +10,16 @@ from tests.test_oidc import ISSUER, JWKS_URL, KEY1, _app, _jwk, _settings, _sign
 END_SESSION = f"{ISSUER}/protocol/openid-connect/logout"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_discovery():
+    """Each test starts without a cached discovery document."""
+    from app.core import oidc
+
+    oidc.reset_caches()
+    yield
+    oidc.reset_caches()
+
+
 def _provider(**discovery):
     respx.get(f"{ISSUER}/.well-known/openid-configuration").mock(
         return_value=Response(200, json={"issuer": ISSUER, "jwks_uri": JWKS_URL, **discovery})
@@ -66,6 +76,11 @@ async def test_oauth_logout_url_wins_over_discovery():
 @pytest.mark.parametrize("discovery", [
     Response(200, json={"issuer": ISSUER, "jwks_uri": JWKS_URL}),  # no end_session_endpoint
     Response(503),  # discovery fails
+    Response(200, json=["not", "an", "object"]),
+    # A logout on another host than the issuer: the page's CSP form-action allows only
+    # the issuer's, so the browser would block the redirect (set OAUTH_LOGOUT_URL).
+    Response(200, json={"issuer": ISSUER, "jwks_uri": JWKS_URL,
+                        "end_session_endpoint": "https://auth.example.net/logout"}),
 ])
 @pytest.mark.asyncio
 async def test_without_a_logout_endpoint_only_the_apps_session_ends(discovery):

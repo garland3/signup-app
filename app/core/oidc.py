@@ -46,6 +46,8 @@ async def _discovery(settings: Settings, http: httpx.AsyncClient) -> dict:
         r = await http.get(f"{issuer}/.well-known/openid-configuration")
         r.raise_for_status()
         doc = r.json()
+        if not isinstance(doc, dict):  # not cached: the next sign-in tries again
+            raise IdTokenError("the provider's discovery document isn't a JSON object")
         _discovery_cache[issuer] = doc
     return doc
 
@@ -69,7 +71,7 @@ async def logout_url(settings: Settings, http: httpx.AsyncClient) -> str:
         return ""
     try:
         url = (await _discovery(settings, http)).get("end_session_endpoint")
-    except (httpx.HTTPError, ValueError) as e:
+    except (httpx.HTTPError, ValueError, IdTokenError) as e:
         logger.warning("discovery failed, so Log out ends the app's session only: %s", e)
         return ""
     return url if isinstance(url, str) else ""

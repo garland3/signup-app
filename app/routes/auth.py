@@ -238,6 +238,17 @@ async def logout(request: Request):
         async with httpx.AsyncClient(timeout=10.0) as http:
             url = await logout_url(s, http)
         back = s.post_logout_redirect_url
+        u = urlparse(url)
+        if url and f"{u.scheme}://{u.netloc}" != s.logout_form_origin:
+            # The page's CSP form-action allows only logout_form_origin: the
+            # browser would block this redirect, and Log out would seem to do
+            # nothing. Discovery named a logout on another host than the issuer.
+            logger.warning(
+                "the provider's logout endpoint %s isn't on %s, which the page allows; "
+                "set OAUTH_LOGOUT_URL to it. Log out ends the app's session only.",
+                url, s.logout_form_origin,
+            )
+            url = ""
         if url and back:
             params = {"client_id": s.OAUTH_CLIENT_ID, "post_logout_redirect_uri": back}
             if id_token:
