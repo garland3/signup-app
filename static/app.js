@@ -149,14 +149,22 @@ function renderMetadataHeaders() {
     Array.prototype.slice.call(head.querySelectorAll("th[data-meta]")).forEach(function(th) {
         th.parentNode.removeChild(th);
     });
-    // Insert metadata headers before the last (actions) column
+    // Insert metadata headers before the last (actions) column, but the
+    // optional Task next to the team column when there is one.
     var lastTh = head.lastElementChild;
+    var teamTh = document.getElementById("team-col-header");
     metadataColumns().forEach(function(c) {
         var th = document.createElement("th");
         th.setAttribute("data-meta", c.field);
         th.textContent = c.label;
-        head.insertBefore(th, lastTh);
+        head.insertBefore(th, besideTeam(c) ? teamTh.nextSibling : lastTh);
     });
+}
+
+// With teams, the optional Task goes next to the team column (Project | Task),
+// as a key's two labels; required metadata columns stay before the actions.
+function besideTeam(c) {
+    return teamsEnabled && !c.required;
 }
 
 // The metadata a key is made with, and shown with in the keys table: the
@@ -278,6 +286,7 @@ async function loadUser() {
         renderTeamSelect();
         // The keys may have loaded first: show their team column and names.
         renderTeamHeader();
+        renderMetadataHeaders();
         if (keysLoaded) renderKeys();
     }
 }
@@ -356,7 +365,7 @@ function renderKeys() {
     tableBox.classList.remove("hidden");
     noKeys.classList.add("hidden");
 
-    var metaFields = metadataColumns().map(function(c) { return c.field; });
+    var cols = metadataColumns();
 
     // Rebuild rows using DOM APIs rather than HTML concatenation so no
     // untrusted value ever enters an HTML/JS parsing context.
@@ -365,6 +374,7 @@ function renderKeys() {
         var tr = document.createElement("tr");
         appendCell(tr, k.display_name || k.name);
         if (teamsEnabled) appendCell(tr, teamLabel(k)).className = "team-cell";
+        appendMetadataCells(tr, k, cols.filter(besideTeam));
 
         var prefixCell = document.createElement("td");
         var prefixSpan = document.createElement("span");
@@ -393,10 +403,7 @@ function renderKeys() {
         statusCell.appendChild(statusSpan);
         tr.appendChild(statusCell);
 
-        metaFields.forEach(function(f) {
-            var v = (k.metadata && k.metadata[f]) ? k.metadata[f] : "-";
-            appendCell(tr, v);
-        });
+        appendMetadataCells(tr, k, cols.filter(function(c) { return !besideTeam(c); }));
 
         var actionsCell = document.createElement("td");
         if (k.is_active) {
@@ -409,6 +416,12 @@ function renderKeys() {
         tr.appendChild(actionsCell);
 
         tbody.appendChild(tr);
+    });
+}
+
+function appendMetadataCells(tr, k, cols) {
+    cols.forEach(function(c) {
+        appendCell(tr, (k.metadata && k.metadata[c.field]) ? k.metadata[c.field] : "-");
     });
 }
 

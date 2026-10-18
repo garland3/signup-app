@@ -167,7 +167,10 @@ async def get_user(user_id: str = "", authorization: str = Header()):
         "budget_reset_at",
         (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
     )
-    _seed_daily_activity(user_id)
+    # Spend from the synthetic activity, if it's been made: it's made when the
+    # activity is first read (the Usage page reads it before this), not here,
+    # where it would come before the user's first key (key creation looks the
+    # user up first) and could never match the keys made through the app.
     spend_total = sum(
         float(r["metrics"]["spend"])
         for r in daily_activity_db.get(user_id, [])
@@ -499,6 +502,16 @@ def _seed_daily_activity(user_id: str) -> None:
         }
         return defaults.get(alias, {})
 
+    def _resolve_team(alias: str) -> str | None:
+        """The key's team, which LiteLLM's daily rollup keeps for each key."""
+        for record in keys_db.values():
+            if (
+                record.get("user_id") == user_id
+                and record.get("key_alias", "").endswith(alias)
+            ):
+                return record.get("team_id")
+        return {"prod": "team-alpha", "research": "team-beta"}.get(alias)
+
     days: list[dict] = []
     for days_ago, events in samples:
         d = (today - timedelta(days=days_ago)).isoformat()
@@ -518,6 +531,7 @@ def _seed_daily_activity(user_id: str) -> None:
                     "metrics": _zero(),
                     "metadata": {
                         "key_alias": _alias(alias),
+                        "team_id": _resolve_team(alias),
                         **_resolve_key_metadata(alias),
                     },
                 },
