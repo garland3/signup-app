@@ -361,6 +361,16 @@ OAUTH_SCOPES=openid email profile offline_access  # Entra ID: offline_access, fo
   neither, and is logged, so a team admin who renames their team can't take
   another team's group members, though the clash blocks that group until it's
   resolved. Keep changes to aliases with the prefix to proxy administrators.
+- **Names without the prefix:** `HIDE_TEAM_NAME_PREFIX=true` shows team names
+  without `TEAM_GROUP_PREFIX` (`project-alpha` as `alpha`): in the keys table,
+  the team pickers and the Usage page's project/task breakdown. Display only:
+  the API, LiteLLM and the groups keep the full names. A name without the
+  prefix is shown as it is. It applies only here, with teams from the identity
+  provider, whose groups all have the prefix: teams people join in LiteLLM
+  (`TEAM_SOURCE=litellm`) can have any name, and without the prefix `project-x`
+  and `x` would look the same. `/api/config` gives the prefix the page leaves
+  off as `team_name_prefix`, and the breakdown's rows the shown name as
+  `display_project`.
 - **Only administrators may create groups with the team prefix, or add people
   to them.** A group named like a team makes its members members of that team,
   with its models and budget. Some providers let people create groups

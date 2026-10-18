@@ -97,10 +97,20 @@ function teamLabel(k) {
     if (!k.team_id) return "-";
     for (var i = 0; i < userTeams.length; i++) {
         if (userTeams[i].team_id === k.team_id) {
-            return userTeams[i].team_alias || k.team_id;
+            return teamName(userTeams[i].team_alias || k.team_id);
         }
     }
-    return k.team_alias || k.team_id;
+    return teamName(k.team_alias || k.team_id);
+}
+
+// A team's name as shown: without the prefix HIDE_TEAM_NAME_PREFIX leaves off
+// ("project-alpha" as "alpha"), unless nothing is left after it.
+function teamName(name) {
+    var prefix = appConfig.team_name_prefix || "";
+    if (prefix && name && name.indexOf(prefix) === 0 && name.length > prefix.length) {
+        return name.slice(prefix.length);
+    }
+    return name;
 }
 
 function renderBudgetHeader() {
@@ -300,7 +310,7 @@ function renderTeamSelect() {
     userTeams.forEach(function(t) {
         var opt = document.createElement("option");
         opt.value = t.team_id;
-        opt.textContent = t.team_alias || t.team_id;
+        opt.textContent = teamName(t.team_alias || t.team_id);
         select.appendChild(opt);
     });
     if (userTeams.length > 0) {
@@ -635,7 +645,7 @@ function showJoinModal() {
         availableTeams.forEach(function(t) {
             var opt = document.createElement("option");
             opt.value = t.team_id;
-            opt.textContent = t.team_alias || t.team_id;
+            opt.textContent = teamName(t.team_alias || t.team_id);
             select.appendChild(opt);
         });
     }
