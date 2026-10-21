@@ -22,6 +22,12 @@ dev = [
     "playwright>=1.59.0",
 ]
 
+[tool.uv]
+# pyyaml (via uvicorn[standard]) has no Python 3.15 wheel yet, so the image
+# builds it from its sdist; pin its build tools so that build is reproducible.
+# Drop this once pyyaml publishes cp315 wheels.
+build-constraint-dependencies = ["setuptools==84.2.1", "cython==3.3.0"]
+
 [tool.setuptools.packages.find]
 include = ["app*"]
 
