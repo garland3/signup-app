@@ -44,6 +44,41 @@ cp .env.example .env
 docker compose up --build
 ```
 
+### Released images
+
+Each release is published as a container image on the GitHub Container
+Registry and attached to its [GitHub Release](https://github.com/garland3/signup-app/releases):
+
+```bash
+docker pull ghcr.io/garland3/signup-app:0.2.0   # or :latest
+cp .env.example .env   # set LITELLM_BASE_URL, LITELLM_ADMIN_KEY, PROXY_SECRET
+docker run -p 8000:8000 --env-file .env ghcr.io/garland3/signup-app:0.2.0
+```
+
+Without registry access, download `signup-app-<version>-linux-amd64.tar.gz`
+and its `.sha256` from the release, then:
+
+```bash
+sha256sum -c signup-app-0.2.0-linux-amd64.tar.gz.sha256
+docker load -i signup-app-0.2.0-linux-amd64.tar.gz
+```
+
+To build the image yourself from a checkout: `docker build -t signup-app .`
+(or `podman build`), then run it as above with `signup-app` as the image.
+
+### Cutting a release
+
+1. Set `version` in `pyproject.toml` and merge to `main`.
+2. Tag the merge commit and push the tag:
+   `git tag v<version> && git push origin v<version>`.
+
+`.github/workflows/release.yml` then builds the image, checks that it starts
+(`/api/health`), scans it with Trivy (report attached to the release), pushes
+`ghcr.io/garland3/signup-app:<version>` and `:latest`, and creates the GitHub
+Release with the image tarball and checksum. The tag must match
+`pyproject.toml`. To rebuild an existing tag, run the workflow manually
+(Actions > Release > Run workflow).
+
 ## How It Works
 
 The app is a thin UI layer over LiteLLM's key management API:
