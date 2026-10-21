@@ -34,9 +34,22 @@ COPY static/ static/
 # The venv is built on the interpreter's real path (e.g. /usr/bin/python3.15),
 # found here rather than hard-coded, so a base-image bump needs no edit; the
 # runtime stage checks that the same path exists there.
-RUN python3 -m pip install --no-cache-dir uv && \
+#
+# Behind a TLS-inspecting corporate proxy, pass its CA so pip and uv can
+# download packages:
+#   docker build --secret id=corp_ca,src=corp-ca.pem .
+# The CA is added to the system bundle for this step only; it is mounted as a
+# secret, so it is never stored in an image layer. Without the secret the
+# build is unchanged.
+RUN --mount=type=secret,id=corp_ca \
+    if [ -s /run/secrets/corp_ca ]; then \
+      cat /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /run/secrets/corp_ca > /tmp/ca-bundle.pem && \
+      export SSL_CERT_FILE=/tmp/ca-bundle.pem PIP_CERT=/tmp/ca-bundle.pem; \
+    fi && \
+    python3 -m pip install --no-cache-dir uv && \
     UV_PYTHON="$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')" \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev && \
+    rm -f /tmp/ca-bundle.pem
 
 # Runtime stage: minimal distroless Hardened Image (no shell, no package
 # manager) for a near-zero-CVE footprint, pinned to the matching 3.15 runtime

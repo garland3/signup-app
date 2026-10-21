@@ -64,7 +64,37 @@ docker load -i signup-app-0.2.0-linux-amd64.tar.gz
 ```
 
 To build the image yourself from a checkout: `docker build -t signup-app .`
-(or `podman build`), then run it as above with `signup-app` as the image.
+(or `podman build`), then run it as above with `signup-app` as the image. On
+an Apple Silicon Mac, add `--platform linux/amd64` to build for x86-64 Linux
+servers.
+
+### Corporate proxies and internal CAs
+
+**Building behind a TLS-inspecting proxy.** If the build fails with
+`CERTIFICATE_VERIFY_FAILED` while installing packages, pass your corporate CA
+(PEM) as a build secret:
+
+```bash
+docker build --secret id=corp_ca,src=$HOME/corp-ca.pem -t signup-app .
+```
+
+The CA is added to the builder's trusted certificates for the dependency
+install step only. Because it is mounted as a secret, it is not stored in any
+image layer. Without `--secret` the build is unchanged.
+
+**Calling internal HTTPS services at runtime.** If LiteLLM or your identity
+provider uses a certificate from an internal CA, mount a bundle and point
+`SSL_CERT_FILE` at it:
+
+```bash
+cat /etc/ssl/cert.pem $HOME/corp-ca.pem > $HOME/corp-bundle.pem   # public roots + corporate CA
+docker run -p 8000:8000 --env-file .env \
+  -v $HOME/corp-bundle.pem:/certs/bundle.pem:ro -e SSL_CERT_FILE=/certs/bundle.pem \
+  signup-app
+```
+
+`SSL_CERT_FILE` replaces the default trust store, so include the public roots
+as shown if the app also calls public HTTPS sites.
 
 ### Cutting a release
 
