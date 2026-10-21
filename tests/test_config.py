@@ -104,3 +104,24 @@ def test_trusted_origins_skips_malformed_entries():
         TRUSTED_ORIGINS="example.com,, ,https://good.example.com,not-a-url",
     )
     assert s.trusted_origins == ["https://good.example.com"]
+
+
+def test_blank_max_active_keys_means_no_limit(monkeypatch):
+    # .env.example leaves it blank; that must start the app, not crash it.
+    monkeypatch.setenv("MAX_ACTIVE_KEYS_PER_USER", "")
+    assert Settings(LITELLM_ADMIN_KEY="sk-test", _env_file=None).MAX_ACTIVE_KEYS_PER_USER is None
+    monkeypatch.setenv("MAX_ACTIVE_KEYS_PER_USER", "5")
+    assert Settings(LITELLM_ADMIN_KEY="sk-test", _env_file=None).MAX_ACTIVE_KEYS_PER_USER == 5
+
+
+def test_env_example_loads(tmp_path, monkeypatch):
+    # Copying .env.example to .env, as the README says, must give valid settings.
+    import shutil
+    from pathlib import Path
+
+    shutil.copy(Path(__file__).parent.parent / ".env.example", tmp_path / ".env")
+    monkeypatch.chdir(tmp_path)
+    for name in list(Settings.model_fields):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings()
+    assert s.MAX_ACTIVE_KEYS_PER_USER is None

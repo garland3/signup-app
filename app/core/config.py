@@ -1,6 +1,7 @@
 from typing import Literal
 from urllib.parse import urlparse
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 # Key metadata the app writes or reads itself (the duration shown in the UI,
@@ -183,6 +184,15 @@ class Settings(BaseSettings):
     # Trailing slashes and paths are ignored. When empty, the app falls
     # back to a strict same-origin comparison against its own request URL.
     TRUSTED_ORIGINS: str = ""
+
+    @field_validator("MAX_ACTIVE_KEYS_PER_USER", mode="before")
+    @classmethod
+    def _blank_means_no_limit(cls, value):
+        # .env.example ships MAX_ACTIVE_KEYS_PER_USER= (blank) to mean "no
+        # limit"; an empty string would otherwise fail int parsing at startup.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
