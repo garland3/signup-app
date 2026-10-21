@@ -132,7 +132,7 @@ jobs:
             echo "docker run -p 8000:8000 --env-file .env $IMAGE:$VERSION"
             echo '```'
             echo
-            echo "Built from \`$GITHUB_SHA\` on Red Hat Hardened Images (Python 3.14), linux/amd64."
+            echo "Built from \`$GITHUB_SHA\` on Red Hat Hardened Images (Python 3.15), linux/amd64."
             echo "The Trivy scan of this image is attached as \`trivy-image-report.txt\`."
           } > release-notes.md
           [ -s trivy-image-report.txt ] || echo "Trivy scan did not run; see the workflow log." > trivy-image-report.txt
