@@ -315,3 +315,45 @@ async def test_update_key_when_the_team_cannot_be_read_changes_nothing(status, e
         r = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": ["gpt-4o"]})
     assert r.status_code == expected
     assert not upd.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("models", [[""], ["  "], ["gpt-4o", " "]])
+async def test_blank_model_names_are_400_on_create_and_update(models):
+    _mock_teams(["gpt-4o"])
+    gen = _mock_create()
+    upd = _mock_owned_key()
+    async with _client(_app()) as c:
+        created = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k", "team_id": "team-alpha", "models": models,
+        })
+        updated = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": models})
+    assert created.status_code == 400 and updated.status_code == 400
+    assert not gen.called and not upd.called  # not widened to all of the team's models
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("body", [
+    {"team_id": "team-alpha"},  # no team_info
+    {"team_info": {"team_id": "team-alpha"}},  # no models field
+    {"team_info": {"team_id": "team-alpha", "models": "gpt-4o"}},  # not a list
+])
+async def test_malformed_team_info_fails_closed(body):
+    respx.get(f"{LITELLM}/team/list").mock(
+        return_value=Response(200, json=[{"team_id": "team-alpha"}])
+    )
+    respx.get(f"{LITELLM}/team/info").mock(return_value=Response(200, json=body))
+    proxy = _mock_proxy_models()
+    gen = _mock_create()
+    upd = _mock_owned_key()
+    async with _client(_app()) as c:
+        listed = await c.get("/api/models?team_id=team-alpha", headers=AUTH)
+        created = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k", "team_id": "team-alpha", "models": ["gpt-4o"],
+        })
+        updated = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": ["gpt-4o"]})
+    assert listed.status_code == created.status_code == updated.status_code == 502
+    assert not proxy.called  # not read as an unrestricted team
+    assert not gen.called and not upd.called

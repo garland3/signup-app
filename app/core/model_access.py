@@ -8,11 +8,14 @@ the proxy is allowed.
 from __future__ import annotations
 
 import fnmatch
+import logging
 import time
 
 from fastapi import HTTPException
 
 from app.core.litellm_client import LiteLLMClient
+
+logger = logging.getLogger(__name__)
 
 ALL_PROXY_MODELS = "all-proxy-models"
 NO_DEFAULT_MODELS = "no-default-models"
@@ -63,13 +66,36 @@ def is_allowed(model: str, allowed: list[str]) -> bool:
     )
 
 
-def check_models(requested: list[str] | None, allowed: list[str], where: str) -> list[str]:
-    """The requested models, de-duplicated, if all are allowed; else a 400.
+async def models_for(client: LiteLLMClient, team_id: str | None, team_word: str) -> list[str]:
+    """The models a key in ``team_id`` may use (``None``: the proxy's), for both
+    the picker and the create/update checks. 400 if the team doesn't exist,
+    502 if LiteLLM can't say."""
+    try:
+        team = await client.get_team(team_id) if team_id else None
+    except Exception as e:
+        logger.exception("LiteLLM get_team failed: %s", e)
+        raise HTTPException(status_code=502, detail="Upstream service error")
+    if team_id and team is None:
+        raise HTTPException(status_code=400, detail=f"Invalid {team_word} for this user")
+    try:
+        return await allowed_models(client, team)
+    except Exception as e:
+        logger.exception("LiteLLM list_models failed: %s", e)
+        raise HTTPException(status_code=502, detail="Upstream service error")
 
-    An empty or missing list means "all the models the team allows", so it is
-    returned empty and the key inherits the team's access.
-    """
-    wanted = list(dict.fromkeys(m.strip() for m in (requested or []) if m and m.strip()))
+
+def requested_models(requested: list[str] | None) -> list[str]:
+    """The requested model names, trimmed and de-duplicated; a 400 for a blank
+    one, so ``[""]`` can't stand for "all models". Empty or missing means all
+    the models the team allows: the key inherits the team's access."""
+    wanted = [m.strip() if isinstance(m, str) else "" for m in (requested or [])]
+    if "" in wanted:
+        raise HTTPException(status_code=400, detail="Model names can't be blank")
+    return list(dict.fromkeys(wanted))
+
+
+def check_models(wanted: list[str], allowed: list[str], where: str) -> list[str]:
+    """``wanted`` if every model is allowed; else a 400 naming the others."""
     not_allowed = [m for m in wanted if not is_allowed(m, allowed)]
     if not_allowed:
         raise HTTPException(

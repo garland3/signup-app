@@ -9,7 +9,7 @@ from app.core.audit import audit
 from app.core import durations
 from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
-from app.core.model_access import allowed_models, check_models
+from app.core.model_access import check_models, models_for, requested_models
 from app.core.rate_limit import limiter
 from app.core.team_claims import refresh_groups, teams_for_groups
 
@@ -476,20 +476,12 @@ async def _checked_models(
 ) -> list[str]:
     """``requested`` de-duplicated, if every model is one ``team_id`` allows
     (no team: one on the proxy); a 400 otherwise. Empty means all of them."""
-    if not requested:
+    wanted = requested_models(requested)
+    if not wanted:
         return []
     s = get_settings()
-    try:
-        team = await client.get_team(team_id) if team_id else None
-    except Exception as e:
-        raise _upstream_error("get_team", e)
-    if team_id and team is None:
-        raise HTTPException(status_code=400, detail=f"Invalid {s.team_word()} for this user")
-    try:
-        allowed = await allowed_models(client, team)
-    except Exception as e:
-        raise _upstream_error("list_models", e)
-    return check_models(requested, allowed, f"this {s.team_word()}" if team_id else "this proxy")
+    allowed = await models_for(client, team_id, s.team_word())
+    return check_models(wanted, allowed, f"this {s.team_word()}" if team_id else "this proxy")
 
 
 @router.get("/keys")

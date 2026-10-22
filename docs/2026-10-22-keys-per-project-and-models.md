@@ -47,14 +47,17 @@ offered. The proxy's model list is cached for 60 seconds.
   team the caller isn't in is rejected (400). With teams off, the parameter
   is ignored and the proxy's models are returned. With `TEAM_SOURCE=claims`,
   membership comes from the sign-in's groups, as for `/api/me`; under group
-  overage the request is refused with the same 403 as key creation.
+  overage the request is refused with the same 403 as key creation. The
+  picker and the create/update checks share one lookup (`models_for`), so
+  they can't disagree.
 - **`POST /api/keys`** accepts `models` as before. Each requested model must be
   in the team's allowed list, or match one of its wildcards (`openai/*` allows
   `openai/gpt-4o`), or the request fails with 400 before anything is created.
   This is deliberately stricter than LiteLLM: an access-group name that isn't
-  in the list is refused. If the team or the proxy's model list can't be read,
-  the request fails (400 for a missing team, 502 otherwise) and nothing is
-  created. An empty or missing `models` means "all of the project's models":
+  in the list is refused, and so is a blank model name (so `[""]` can't mean
+  "all"). If the team or the proxy's model list can't be read, or `/team/info`
+  has no `team_info.models` list, the request fails (400 for a missing team,
+  502 otherwise) and nothing is created. An empty or missing `models` means "all of the project's models":
   no list is sent, and the key inherits the team's access.
 - **`PATCH /api/keys/{token}`** applies the same check when `models` is
   changed, against the key's own team, so a key can't be widened beyond its
@@ -96,6 +99,11 @@ two models, and Beta Team has no model list, so it offers every proxy model.
 | Nothing picked is refused | [07-nothing-picked.png](images/keys-per-project/07-nothing-picked.png) |
 | Several keys per project, Models column | [08-keys-table.png](images/keys-per-project/08-keys-table.png) |
 | Before: `MAX_ACTIVE_KEYS_PER_USER=2` | [09-old-limit.png](images/keys-per-project/09-old-limit.png) |
+| A project with no models yet (`no-default-models`) | [10-no-models.png](images/keys-per-project/10-no-models.png) |
+| The model list couldn't be loaded | [11-load-failed.png](images/keys-per-project/11-load-failed.png) |
+
+Steps 10 and 11 answer `/api/models` in the browser (Playwright route
+interception) to show those two states; the rest is the running app.
 
 ## Rollout
 

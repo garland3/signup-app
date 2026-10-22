@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.core.config import get_settings
 from app.core.litellm_client import LiteLLMClient
-from app.core.model_access import allowed_models
+from app.core.model_access import models_for
 from app.core.team_claims import overage_detail, session_teams
 
 logger = logging.getLogger(__name__)
@@ -25,10 +25,7 @@ async def list_models(request: Request, team_id: str | None = None):
     s = get_settings()
     client = LiteLLMClient(s)
     if not s.FEATURE_TEAMS_ENABLED:
-        try:
-            return {"team_id": None, "models": await allowed_models(client, None)}
-        except Exception as e:
-            raise _upstream_error("list_models", e)
+        return {"team_id": None, "models": await models_for(client, None, s.team_word())}
 
     if not team_id:
         raise HTTPException(status_code=400, detail=f"Choose a {s.team_word()}")
@@ -44,14 +41,4 @@ async def list_models(request: Request, team_id: str | None = None):
         raise HTTPException(status_code=403, detail=overage_detail(s))
     if team_id not in {t.get("team_id") for t in teams}:
         raise HTTPException(status_code=400, detail=f"Invalid {s.team_word()} for this user")
-    try:
-        team = await client.get_team(team_id)
-    except Exception as e:
-        raise _upstream_error("get_team", e)
-    if team is None:  # removed since the membership check: offer nothing
-        raise HTTPException(status_code=400, detail=f"Invalid {s.team_word()} for this user")
-    try:
-        models = await allowed_models(client, team)
-    except Exception as e:
-        raise _upstream_error("list_models", e)
-    return {"team_id": team_id, "models": models}
+    return {"team_id": team_id, "models": await models_for(client, team_id, s.team_word())}
