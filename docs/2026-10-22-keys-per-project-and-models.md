@@ -68,8 +68,9 @@ offered. The proxy's model list is cached for 60 seconds.
   cache, and request validation.
 - `app/routes/models.py` (new): `GET /api/models`.
 - `app/core/litellm_client.py`: `list_models()` (`GET /v1/models`) and
-  `get_team()` (`GET /team/info`).
-- `app/core/team_claims.py`: teams from claims carry their `models` too.
+  `get_team()` (`GET /team/info`). A team's models are always read from
+  `/team/info` after the membership check, for both team sources, so
+  `/api/me` keeps its shape.
 - `app/routes/keys.py`: model checks in create and update.
 - `static/`: the Models section and column.
 - `mocks/litellm_mock.py`: `GET /v1/models`, and seeded team model lists.
