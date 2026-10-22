@@ -7,6 +7,7 @@ the proxy is allowed.
 """
 from __future__ import annotations
 
+import fnmatch
 import time
 
 from fastapi import HTTPException
@@ -50,6 +51,18 @@ async def allowed_models(client: LiteLLMClient, team: dict | None) -> list[str]:
     return sorted({m for m in listed if m != NO_DEFAULT_MODELS})
 
 
+def is_allowed(model: str, allowed: list[str]) -> bool:
+    """Whether ``model`` is one of ``allowed``, or matches one of its wildcards
+    (a team list's ``openai/*`` allows ``openai/gpt-4o``, as in LiteLLM).
+
+    Anything else is refused, including an access-group name the team doesn't
+    list: keys may only name what the project lists or a wildcard covers.
+    """
+    return any(
+        model == a or ("*" in a and fnmatch.fnmatchcase(model, a)) for a in allowed
+    )
+
+
 def check_models(requested: list[str] | None, allowed: list[str], where: str) -> list[str]:
     """The requested models, de-duplicated, if all are allowed; else a 400.
 
@@ -57,7 +70,7 @@ def check_models(requested: list[str] | None, allowed: list[str], where: str) ->
     returned empty and the key inherits the team's access.
     """
     wanted = list(dict.fromkeys(m.strip() for m in (requested or []) if m and m.strip()))
-    not_allowed = [m for m in wanted if m not in set(allowed)]
+    not_allowed = [m for m in wanted if not is_allowed(m, allowed)]
     if not_allowed:
         raise HTTPException(
             status_code=400,

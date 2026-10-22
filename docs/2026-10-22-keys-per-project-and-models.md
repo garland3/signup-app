@@ -45,9 +45,15 @@ offered. The proxy's model list is cached for 60 seconds.
 - **New** `GET /api/models?team_id=<id>` returns `{"team_id", "models": [...]}`
   for one of the caller's teams. With teams on, `team_id` is required, and a
   team the caller isn't in is rejected (400). With teams off, the parameter
-  is ignored and the proxy's models are returned.
+  is ignored and the proxy's models are returned. With `TEAM_SOURCE=claims`,
+  membership comes from the sign-in's groups, as for `/api/me`; under group
+  overage the request is refused with the same 403 as key creation.
 - **`POST /api/keys`** accepts `models` as before. Each requested model must be
-  in the team's allowed list, or the request fails with 400 before anything is
+  in the team's allowed list, or match one of its wildcards (`openai/*` allows
+  `openai/gpt-4o`), or the request fails with 400 before anything is created.
+  This is deliberately stricter than LiteLLM: an access-group name that isn't
+  in the list is refused. If the team or the proxy's model list can't be read,
+  the request fails (400 for a missing team, 502 otherwise) and nothing is
   created. An empty or missing `models` means "all of the project's models":
   no list is sent, and the key inherits the team's access.
 - **`PATCH /api/keys/{token}`** applies the same check when `models` is

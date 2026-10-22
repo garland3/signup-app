@@ -163,7 +163,12 @@ each key's models, or "All". A project's models come from its LiteLLM team's
 
 Without teams, every model on the proxy is offered. The server checks the
 models on create and update (`PATCH /api/keys/{token}`), so a key can't be
-given a model its project doesn't allow. See
+given a model its project doesn't allow. A requested model must be one the
+project (or, without teams, the proxy) lists, or match one of its wildcards:
+a team list with `openai/*` allows `openai/gpt-4o`. This is stricter than
+LiteLLM on purpose: an access-group name that isn't in the list is refused
+(400), even if LiteLLM would expand it. Under group overage (`TEAM_SOURCE=claims`),
+`GET /api/models` is refused with the same 403 as key creation. See
 [docs/2026-10-22-keys-per-project-and-models.md](docs/2026-10-22-keys-per-project-and-models.md).
 
 ## Key lifetimes (`MAX_KEY_DURATION`)

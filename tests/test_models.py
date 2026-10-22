@@ -39,7 +39,7 @@ def _mock_teams(models, member_of=("team-alpha",)):
     respx.get(f"{LITELLM}/team/list").mock(
         return_value=Response(200, json=[{"team_id": t} for t in member_of])
     )
-    respx.get(f"{LITELLM}/team/info").mock(
+    respx.get(f"{LITELLM}/team/info", params={"team_id": "team-alpha"}).mock(
         return_value=Response(200, json={
             "team_id": "team-alpha",
             "team_info": {"team_id": "team-alpha", "models": models},
@@ -209,6 +209,68 @@ async def test_many_keys_in_one_project_without_a_limit():
     assert not key_list.called
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_team_wildcard_allows_matching_models_only():
+    _mock_teams(["openai/*"])
+    gen = _mock_create()
+    async with _client(_app()) as c:
+        ok = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k", "team_id": "team-alpha", "models": ["openai/gpt-4o"],
+        })
+        bad = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k2", "team_id": "team-alpha", "models": ["anthropic/claude"],
+        })
+    assert ok.status_code == 201
+    assert json.loads(gen.calls.last.request.content)["models"] == ["openai/gpt-4o"]
+    assert bad.status_code == 400
+    assert gen.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_access_group_name_not_on_the_proxy_list_is_400():
+    # Deliberately strict: a key may only name models the proxy (or project)
+    # lists, so an access-group name is refused even if LiteLLM would expand it.
+    _mock_proxy_models()
+    gen = _mock_create()
+    async with _client(_app(teams=False)) as c:
+        r = await c.post("/api/keys", headers=AUTH, json={"name": "k", "models": ["beta-models"]})
+    assert r.status_code == 400
+    assert not gen.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status, expected", [(404, 400), (500, 502)])
+async def test_create_key_when_the_team_cannot_be_read_creates_nothing(status, expected):
+    respx.get(f"{LITELLM}/team/list").mock(
+        return_value=Response(200, json=[{"team_id": "team-alpha"}])
+    )
+    respx.get(f"{LITELLM}/team/info").mock(return_value=Response(status, json={}))
+    gen = _mock_create()
+    async with _client(_app()) as c:
+        r = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k", "team_id": "team-alpha", "models": ["gpt-4o"],
+        })
+    assert r.status_code == expected
+    assert not gen.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_key_when_the_proxy_models_cannot_be_read_creates_nothing():
+    _mock_teams([])  # unrestricted team: needs the proxy's list
+    respx.get(f"{LITELLM}/v1/models").mock(return_value=Response(500))
+    gen = _mock_create()
+    async with _client(_app()) as c:
+        r = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k", "team_id": "team-alpha", "models": ["gpt-4o"],
+        })
+    assert r.status_code == 502
+    assert not gen.called
+
+
 # ---- PATCH /api/keys/{token} ----------------------------------------------
 
 def _mock_owned_key(team_id="team-alpha"):
@@ -240,4 +302,16 @@ async def test_update_key_cannot_widen_beyond_the_team():
     async with _client(_app()) as c:
         r = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": ["claude-sonnet"]})
     assert r.status_code == 400
+    assert not upd.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status, expected", [(404, 400), (500, 502)])
+async def test_update_key_when_the_team_cannot_be_read_changes_nothing(status, expected):
+    respx.get(f"{LITELLM}/team/info").mock(return_value=Response(status, json={}))
+    upd = _mock_owned_key()
+    async with _client(_app()) as c:
+        r = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": ["gpt-4o"]})
+    assert r.status_code == expected
     assert not upd.called

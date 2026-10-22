@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.core.config import get_settings
 from app.core.litellm_client import LiteLLMClient
 from app.core.model_access import allowed_models
-from app.core.team_claims import session_groups, teams_for_groups
+from app.core.team_claims import overage_detail, session_teams
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +35,13 @@ async def list_models(request: Request, team_id: str | None = None):
     try:
         # Read-only, so the sign-in's groups (as /api/me), not a token refresh.
         if s.TEAM_SOURCE == "claims":
-            teams = await teams_for_groups(session_groups(request), client)
+            teams = await session_teams(request, client)
         else:
             teams = await client.list_teams(user_id=request.state.user_id)
     except Exception as e:
         raise _upstream_error("list_teams", e)
+    if teams is None:  # groups left out of the token: as for key creation
+        raise HTTPException(status_code=403, detail=overage_detail(s))
     if team_id not in {t.get("team_id") for t in teams}:
         raise HTTPException(status_code=400, detail=f"Invalid {s.team_word()} for this user")
     try:

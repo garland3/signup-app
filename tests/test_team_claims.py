@@ -14,6 +14,7 @@ from app.core.rate_limit import limiter
 from app.core.sessions import InMemorySessionMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.keys import router as keys_router
+from app.routes.models import router as models_router
 from app.routes.teams import router as teams_router
 from app.routes.users import router as users_router
 from tests.test_oidc import ISSUER, LITELLM, _mock_provider, _settings, _token
@@ -45,7 +46,7 @@ def _app(settings) -> FastAPI:
         idle_timeout=settings.SESSION_IDLE_TIMEOUT,
         https_only=False,
     )
-    for r in (auth_router, users_router, keys_router, teams_router):
+    for r in (auth_router, users_router, keys_router, teams_router, models_router):
         app.include_router(r)
     return app
 
@@ -917,3 +918,43 @@ async def test_groups_overage_without_a_refresh_token_is_refused_and_audited(aud
     assert r.status_code == 403
     assert "team_claims_overage" in [e for e, _ in audited]
     assert not generate.called
+
+
+def _mock_team_info(models):
+    return respx.get(f"{LITELLM}/team/info", params={"team_id": "t-alpha"}).mock(
+        return_value=Response(200, json={"team_info": {"team_id": "t-alpha", "models": models}})
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_models_of_a_team_named_by_a_group():
+    _mock_provider()
+    _litellm()
+    _mock_team_info(["gpt-4o"])
+    provider = Provider(GROUPS)
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        ok = await c.get("/api/models?team_id=t-alpha")
+        other = await c.get("/api/models?team_id=t-other")
+    assert ok.status_code == 200
+    assert ok.json() == {"team_id": "t-alpha", "models": ["gpt-4o"]}
+    assert other.status_code == 400  # no group names it
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_models_under_groups_overage_is_refused_as_key_creation_is():
+    _mock_provider()
+    _litellm()
+    info = _mock_team_info(["gpt-4o"])
+    provider = Provider(None)
+    provider.extra = {"hasgroups": True}
+    respx.post(TOKEN_URL).mock(side_effect=provider)
+    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
+        await _sign_in(c, provider)
+        r = await c.get("/api/models?team_id=t-alpha")
+    assert r.status_code == 403
+    assert r.json()["detail"] == team_claims.overage_detail(_claims_settings())
+    assert not info.called
