@@ -33,6 +33,7 @@
                     <tr id="keys-table-head">
                         <th>Name</th>
                         <th id="team-col-header" class="hidden" data-team-text="{Team}">Team</th>
+                        <th id="models-col-header">Models</th>
                         <th>Key</th>
                         <th>Created</th>
                         <th>Duration</th>
@@ -65,6 +66,12 @@
                 <label for="key-team" data-team-text="{Team}">Team</label>
                 <select id="key-team"></select>
             </div>
+            <fieldset id="key-models-row" class="key-models">
+                <legend>Models</legend>
+                <label class="checkbox-label"><input type="checkbox" id="key-models-all" checked> <span id="key-models-all-text">All models</span></label>
+                <div id="key-models-list" class="key-models-list hidden"></div>
+                <p id="key-models-hint" class="field-hint" aria-live="polite"></p>
+            </fieldset>
             <div id="required-metadata-fields"></div>
             <div id="create-error" class="form-error hidden" role="alert"></div>
             <div class="modal-actions">
@@ -107,5 +114,6 @@
     </div>
 
     <script src="{{ROOT_PATH}}/static/app.js"></script>
+    <script src="{{ROOT_PATH}}/static/key-models.js"></script>
 </body>
 </html>

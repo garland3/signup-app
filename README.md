@@ -143,6 +143,29 @@ metadata (the JSON boolean) leaves it out of the app:
 `hidden` is reserved, like `deleted_at`: users' metadata can't set it, and
 `REQUIRED_KEY_METADATA` can't ask for it.
 
+## Keys, projects and models
+
+Users can make as many keys as they need: one per project, or several in a
+project, for example one per model. There is no key-count limit unless
+`MAX_ACTIVE_KEYS_PER_USER` is set. That cap counts a user's active keys across
+all projects together, so leave it blank (the default) unless you want an
+overall ceiling. Key creation is still rate limited
+(`RATE_LIMIT_KEY_CREATE_PER_HOUR`).
+
+When creating a key, users pick its models from the ones its project allows:
+"All models in this project" (the default) or any subset. The keys table shows
+each key's models, or "All". A project's models come from its LiteLLM team's
+`models` list:
+
+- empty, or containing `all-proxy-models`: every model on the proxy;
+- `["no-default-models"]`: none, until an administrator sets the list;
+- otherwise: the listed models.
+
+Without teams, every model on the proxy is offered. The server checks the
+models on create and update (`PATCH /api/keys/{token}`), so a key can't be
+given a model its project doesn't allow. See
+[docs/2026-10-22-keys-per-project-and-models.md](docs/2026-10-22-keys-per-project-and-models.md).
+
 ## Key lifetimes (`MAX_KEY_DURATION`)
 
 `MAX_KEY_DURATION` (e.g. `90d`; units `s`, `m`, `h`, `d`, `mo`) caps the duration a key
@@ -540,7 +563,8 @@ LiteLLM.
 | GET | `/api/health` | No | Health check |
 | GET | `/api/me` | Yes | Current user email and `team_source`. With teams enabled, also `teams` (`[{team_id, team_alias}]`) and `teams_unavailable` (bool) |
 | GET | `/api/keys` | Yes | List keys (masked) |
-| POST | `/api/keys` | Yes | Create key (full key returned once). With teams enabled, `team_id` is required and must be one of the caller's teams |
+| POST | `/api/keys` | Yes | Create key (full key returned once). With teams enabled, `team_id` is required and must be one of the caller's teams. Optional `models` must be a subset of the team's models (empty: all of them) |
+| GET | `/api/models` | Yes | Models a new key may use: `?team_id=` (one of the caller's teams) with teams enabled, the proxy's models otherwise |
 | PATCH | `/api/keys/{token}` | Yes | Update key settings |
 | DELETE | `/api/keys/{token}` | Yes | Delete key |
 | GET | `/api/dashboard` | Yes | Aggregated usage/spend payload |

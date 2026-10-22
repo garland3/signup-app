@@ -9,6 +9,7 @@ from app.core.audit import audit
 from app.core import durations
 from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
+from app.core.model_access import allowed_models, check_models
 from app.core.rate_limit import limiter
 from app.core.team_claims import refresh_groups, teams_for_groups
 
@@ -390,6 +391,11 @@ async def create_key(body: CreateKeyRequest, request: Request):
             )
         team_id = body.team_id
 
+    # The key's models: a subset of what its team allows (no teams: the
+    # proxy's), checked before anything is created. None picked means all of
+    # them: no list is sent and the key follows the team's access.
+    models = await _checked_models(client, body.models, team_id)
+
     # Ensure the user exists in LiteLLM before creating a key
     try:
         await client.ensure_user(user_id, email=user_email, username=request.state.username)
@@ -421,8 +427,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
         kwargs["team_id"] = team_id
     if duration:
         kwargs["duration"] = durations.for_litellm(duration)  # months as days
-    if body.models:
-        kwargs["models"] = body.models
+    if models:
+        kwargs["models"] = models
     if body.max_budget is not None:
         kwargs["max_budget"] = body.max_budget
     if body.rpm_limit is not None:
@@ -458,11 +464,32 @@ async def create_key(body: CreateKeyRequest, request: Request):
         user=user_email,
         key_id=result.get("token_id", ""),
         key_alias=key_name,
-        models=body.models or [],
+        models=models,
         max_budget=body.max_budget,
         duration=duration,
     )
     return _format_key_response(result, include_full_key=full_key, user_email=user_email)
+
+
+async def _checked_models(
+    client: LiteLLMClient, requested: list[str] | None, team_id: str | None
+) -> list[str]:
+    """``requested`` de-duplicated, if every model is one ``team_id`` allows
+    (no team: one on the proxy); a 400 otherwise. Empty means all of them."""
+    if not requested:
+        return []
+    s = get_settings()
+    try:
+        team = await client.get_team(team_id) if team_id else None
+    except Exception as e:
+        raise _upstream_error("get_team", e)
+    if team_id and team is None:
+        raise HTTPException(status_code=400, detail=f"Invalid {s.team_word()} for this user")
+    try:
+        allowed = await allowed_models(client, team)
+    except Exception as e:
+        raise _upstream_error("list_models", e)
+    return check_models(requested, allowed, f"this {s.team_word()}" if team_id else "this proxy")
 
 
 @router.get("/keys")
@@ -559,7 +586,9 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
             )
         kwargs["key_alias"] = new_alias
     if body.models is not None:
-        kwargs["models"] = body.models
+        # Same rule as a new key, against the key's own team, so a key can't
+        # be widened beyond it. An empty list means all the team's models.
+        kwargs["models"] = await _checked_models(client, body.models, info.get("team_id"))
     if body.max_budget is not None:
         kwargs["max_budget"] = body.max_budget
     if body.rpm_limit is not None:
