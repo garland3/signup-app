@@ -74,6 +74,22 @@ offered. The proxy's model list is cached for 60 seconds.
 - `static/`: the Models section and column.
 - `mocks/litellm_mock.py`: `GET /v1/models`, and seeded team model lists.
 
+## Workflow
+
+Screenshots from the mock LiteLLM (`mocks/litellm_mock.py`): Alpha Team allows
+two models, and Beta Team has no model list, so it offers every proxy model.
+
+![Create-key workflow, step by step](images/keys-per-project/00-overview.png)
+
+| Step | Screenshot |
+|---|---|
+| Models section, "All" by default | [02-dialog-default.png](images/keys-per-project/02-dialog-default.png) |
+| The project's models | [03-pick-models.png](images/keys-per-project/03-pick-models.png) |
+| Another project, another list | [04-switch-project.png](images/keys-per-project/04-switch-project.png) |
+| Nothing picked is refused | [07-nothing-picked.png](images/keys-per-project/07-nothing-picked.png) |
+| Several keys per project, Models column | [08-keys-table.png](images/keys-per-project/08-keys-table.png) |
+| Before: `MAX_ACTIVE_KEYS_PER_USER=2` | [09-old-limit.png](images/keys-per-project/09-old-limit.png) |
+
 ## Rollout
 
 1. Merge and deploy.
