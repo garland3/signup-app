@@ -27,6 +27,7 @@ def create_test_app(*, strip_user_domain: bool = False, teams_enabled: bool = Fa
     from app.routes.users import router as users_router
     from app.routes.keys import router as keys_router
     from app.routes.teams import router as teams_router
+    from app.routes.models import router as models_router
     from app.routes.dashboard import router as dashboard_router
 
     settings = Settings(
@@ -47,6 +48,9 @@ def create_test_app(*, strip_user_domain: bool = False, teams_enabled: bool = Fa
     # Reset the in-memory rate limiter between test apps so per-user caps
     # from one test don't leak into another.
     limiter.reset()
+    # Likewise the cached list of the proxy's models.
+    from app.core.model_access import reset_cache as reset_models_cache
+    reset_models_cache()
 
     app = FastAPI()
     app.state.settings = settings
@@ -55,6 +59,7 @@ def create_test_app(*, strip_user_domain: bool = False, teams_enabled: bool = Fa
     app.include_router(users_router)
     app.include_router(keys_router)
     app.include_router(teams_router)
+    app.include_router(models_router)
     app.include_router(dashboard_router)
 
     return app

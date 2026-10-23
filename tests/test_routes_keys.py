@@ -289,6 +289,10 @@ async def test_block_key_denied_for_other_user(app):
 @respx.mock
 async def test_create_key_with_options(app):
     mock_ensure_user()
+    # Requested models must exist on the proxy (no teams here).
+    respx.get(f"{LITELLM}/v1/models").mock(
+        return_value=Response(200, json={"data": [{"id": "gpt-4"}]})
+    )
     respx.post(f"{LITELLM}/key/generate").mock(
         return_value=Response(200, json={
             "key": "sk-test1234567890abcdef1234567890abcdef1234567890ab",

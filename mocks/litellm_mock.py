@@ -31,15 +31,20 @@ keys_db: dict[str, dict] = {}
 users_db: dict[str, dict] = {}
 # Teams keyed by team_id. members_with_roles is the source of truth for
 # membership; a user's own `teams` list (on the user record) is derived from it.
+# The proxy's models (GET /v1/models). A team's `models` list limits its keys
+# to those; an empty list means every model on the proxy.
+PROXY_MODELS = ["claude-sonnet", "gpt-4o", "gpt-4o-mini", "llama-3-70b"]
 teams_db: dict[str, dict] = {
     "team-alpha": {
         "team_id": "team-alpha",
         "team_alias": "Alpha Team",
+        "models": ["claude-sonnet", "gpt-4o"],
         "members_with_roles": [],
     },
     "team-beta": {
         "team_id": "team-beta",
         "team_alias": "Beta Team",
+        "models": [],
         "members_with_roles": [],
     },
 }
@@ -358,6 +363,21 @@ async def team_list(user_id: str = "", authorization: str = Header()):
     if user_id:
         teams = [t for t in teams if user_id in _member_emails(t)]
     return teams
+
+
+@app.get("/team/info")
+async def team_info(team_id: str, authorization: str = Header()):
+    check_admin(authorization)
+    team = teams_db.get(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return {"team_id": team_id, "team_info": team}
+
+
+@app.get("/v1/models")
+async def proxy_models(authorization: str = Header()):
+    check_admin(authorization)
+    return {"object": "list", "data": [{"id": m, "object": "model"} for m in PROXY_MODELS]}
 
 
 @app.get("/team/available")

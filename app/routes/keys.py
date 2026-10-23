@@ -1,16 +1,24 @@
 import logging
 import re
 from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.audit import audit
 from app.core import durations
 from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
+from app.core.model_access import (
+    MAX_MODEL_NAME_LENGTH,
+    MAX_MODELS_PER_REQUEST,
+    check_models,
+    models_for,
+    requested_models,
+)
 from app.core.rate_limit import limiter
-from app.core.team_claims import refresh_groups, teams_for_groups
+from app.core.team_membership import is_member, member_teams, require_member
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +50,16 @@ def _reject_raw_api_key(token: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid key identifier")
 
 
+ModelList = Annotated[
+    list[Annotated[str, Field(max_length=MAX_MODEL_NAME_LENGTH)]] | None,
+    Field(max_length=MAX_MODELS_PER_REQUEST),
+]
+
+
 class CreateKeyRequest(BaseModel):
     name: str
     duration: str | None = None
-    models: list[str] | None = None
+    models: ModelList = None
     max_budget: float | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
@@ -57,7 +71,7 @@ class CreateKeyRequest(BaseModel):
 
 class UpdateKeyRequest(BaseModel):
     key_alias: str | None = None
-    models: list[str] | None = None
+    models: ModelList = None
     max_budget: float | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
@@ -374,21 +388,14 @@ async def create_key(body: CreateKeyRequest, request: Request):
                     else f"Keys belong to {settings.team_word(True)}: join one before creating a key."
                 ),
             )
-        if from_claims:
-            # The identity provider's current groups, not the session's.
-            groups = await refresh_groups(request)
-        try:
-            if from_claims:
-                teams = await teams_for_groups(groups, client)
-            else:
-                teams = await client.list_teams(user_id=user_id)
-        except Exception as e:
-            raise _upstream_error("list_teams", e)
-        if body.team_id not in {t.get("team_id") for t in teams}:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid {settings.team_word()} for this user"
-            )
+        # The identity provider's current groups (claims), not the session's.
+        await require_member(request, client, body.team_id, refresh_claims=True)
         team_id = body.team_id
+
+    # The key's models: a subset of what its team allows (no teams: the
+    # proxy's), checked before anything is created. None picked means all of
+    # them: no list is sent and the key follows the team's access.
+    models = await _checked_models(client, body.models, team_id)
 
     # Ensure the user exists in LiteLLM before creating a key
     try:
@@ -421,8 +428,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
         kwargs["team_id"] = team_id
     if duration:
         kwargs["duration"] = durations.for_litellm(duration)  # months as days
-    if body.models:
-        kwargs["models"] = body.models
+    if models:
+        kwargs["models"] = models
     if body.max_budget is not None:
         kwargs["max_budget"] = body.max_budget
     if body.rpm_limit is not None:
@@ -458,11 +465,24 @@ async def create_key(body: CreateKeyRequest, request: Request):
         user=user_email,
         key_id=result.get("token_id", ""),
         key_alias=key_name,
-        models=body.models or [],
+        models=models,
         max_budget=body.max_budget,
         duration=duration,
     )
     return _format_key_response(result, include_full_key=full_key, user_email=user_email)
+
+
+async def _checked_models(
+    client: LiteLLMClient, requested: list[str] | None, team_id: str | None
+) -> list[str]:
+    """``requested`` de-duplicated, if every model is one ``team_id`` allows
+    (no team: one on the proxy); a 400 otherwise. Empty means all of them."""
+    wanted = requested_models(requested)
+    if not wanted:
+        return []
+    s = get_settings()
+    allowed = await models_for(client, team_id, s.team_word())
+    return check_models(wanted, allowed, f"this {s.team_word()}" if team_id else "this proxy")
 
 
 @router.get("/keys")
@@ -510,12 +530,8 @@ async def _require_current_team(request: Request, client: LiteLLMClient, info: d
     ):
         audit("rate_limited", bucket="key_change", user=request.state.user_email)
         raise HTTPException(status_code=429, detail="Too many key changes")
-    groups = await refresh_groups(request)
-    try:
-        teams = await teams_for_groups(groups, client)
-    except Exception as e:
-        raise _upstream_error("list_teams", e)
-    if not info.get("team_id") or info["team_id"] not in {t["team_id"] for t in teams}:
+    teams = await member_teams(request, client, refresh_claims=True)
+    if not is_member(teams, info.get("team_id")):
         raise HTTPException(
             status_code=403,
             detail=f"You're no longer in this key's {s.team_word()}, so it can't be changed or "
@@ -559,7 +575,17 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
             )
         kwargs["key_alias"] = new_alias
     if body.models is not None:
-        kwargs["models"] = body.models
+        # Same rule as a new key, against the key's own team, so a key can't
+        # be widened beyond it. An empty list means all the team's models.
+        settings = get_settings()
+        if settings.FEATURE_TEAMS_ENABLED and not info.get("team_id"):
+            # A key from before teams: no team to check against, and "all"
+            # would mean every model on the proxy.
+            raise HTTPException(
+                status_code=400,
+                detail=f"This key has no {settings.team_word()}, so its models can't be changed",
+            )
+        kwargs["models"] = await _checked_models(client, body.models, info.get("team_id"))
     if body.max_budget is not None:
         kwargs["max_budget"] = body.max_budget
     if body.rpm_limit is not None:

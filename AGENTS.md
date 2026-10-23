@@ -98,6 +98,7 @@ The `LiteLLMClient` in `app/core/litellm_client.py` wraps these LiteLLM admin en
 | DELETE /api/keys/{token} | /key/delete | POST |
 | POST /api/keys/{token}/block | /key/block | POST |
 | POST /api/keys/{token}/unblock | /key/unblock | POST |
+| GET /api/models | /team/info, /v1/models | GET |
 
 All requests to LiteLLM include `Authorization: Bearer {LITELLM_ADMIN_KEY}`.
 
@@ -124,7 +125,8 @@ FEATURE_PROXY_SECRET_ENABLED=false
 STRIP_USER_DOMAIN=false
 
 # Key policy
-# Cap on active (non-expired, non-blocked) keys per user. Blank = no limit.
+# Cap on active (non-expired, non-blocked) keys per user, across all
+# projects. Blank = no limit (users make as many keys per project as needed).
 MAX_ACTIVE_KEYS_PER_USER=
 # Comma-separated metadata fields required on each created key
 # (e.g. project,task_number). Values are stored on the key's metadata
@@ -182,6 +184,7 @@ uv run --extra dev pytest tests/ -v
 - `DELETE /api/keys/{token}` -- delete key permanently
 - `POST /api/keys/{token}/block` -- block a key
 - `POST /api/keys/{token}/unblock` -- unblock a key
+- `GET /api/models?team_id=` -- models a new key in that team may use (all proxy models without teams)
 
 ## Common Issues
 
