@@ -64,7 +64,11 @@ offered. The proxy's model list is cached for 60 seconds.
   no list is sent, and the key inherits the team's access.
 - **`PATCH /api/keys/{token}`** applies the same check when `models` is
   changed, against the key's own team, so a key can't be widened beyond its
-  project.
+  project. With teams on, a key without a team (made before teams) can't have
+  its models changed at all (400): there is nothing to check against, and
+  "all" would mean every model on the proxy.
+- `GET /api/models` is under the per-user API limit
+  (`RATE_LIMIT_API_PER_MINUTE`), like every `/api` route.
 
 ### UI
 
@@ -74,7 +78,9 @@ offered. The proxy's model list is cached for 60 seconds.
   changes. Picking no models with "All" unchecked is refused with a message.
   If the list can't be loaded, "All" stays as the user set it (a key meant to
   be limited isn't quietly made unrestricted) and a "Try again" button
-  reloads it.
+  reloads it. The same holds for a project with no models.
+  `tests/test_key_models_browser.py` drives these states in Chromium (skipped
+  when no Chromium can be launched).
 - **Keys table:** a Models column showing a key's models, or "All".
 
 ### Code layout

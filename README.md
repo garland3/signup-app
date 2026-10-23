@@ -170,6 +170,8 @@ LiteLLM on purpose: an access-group name that isn't in the list is refused
 (400), even if LiteLLM would expand it. Under group overage (`TEAM_SOURCE=claims`),
 `GET /api/models` is refused with the same 403 as key creation. A request may
 name at most 100 models, each at most 256 characters (422 beyond that).
+With teams on, the models of a key without a team (made before teams) can't
+be changed (400).
 
 **Upgrading:** `models` on `POST /api/keys` and `PATCH /api/keys/{token}` was
 passed to LiteLLM unchecked before. It is now checked, so existing automation

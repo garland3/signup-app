@@ -400,3 +400,40 @@ async def test_oversized_model_lists_are_refused(models):
 def test_is_allowed_treats_only_star_as_a_wildcard(model, allowed, expected):
     from app.core.model_access import is_allowed
     assert is_allowed(model, allowed) is expected
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("models", [["gpt-4o"], []])
+async def test_update_models_of_a_key_without_a_team_is_400_when_teams_are_on(models):
+    # A key from before teams: nothing to check against, and [] would mean
+    # every model on the proxy.
+    upd = _mock_owned_key(team_id=None)
+    proxy = _mock_proxy_models()
+    async with _client(_app()) as c:
+        r = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": models})
+    assert r.status_code == 400
+    assert not upd.called and not proxy.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_models_of_a_key_without_teams_checks_the_proxy():
+    _mock_proxy_models()
+    upd = _mock_owned_key(team_id=None)
+    async with _client(_app(teams=False)) as c:
+        r = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": ["gpt-4o"]})
+    assert r.status_code == 200
+    assert json.loads(upd.calls.last.request.content)["models"] == ["gpt-4o"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_models_endpoint_is_under_the_per_user_api_limit():
+    from app.core.config import Settings
+    _mock_proxy_models()
+    limit = Settings().RATE_LIMIT_API_PER_MINUTE
+    async with _client(_app(teams=False)) as c:
+        codes = [(await c.get("/api/models", headers=AUTH)).status_code for _ in range(limit + 1)]
+    assert codes[:limit] == [200] * limit
+    assert codes[-1] == 429

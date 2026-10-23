@@ -577,6 +577,14 @@ async def update_key(token: str, body: UpdateKeyRequest, request: Request):
     if body.models is not None:
         # Same rule as a new key, against the key's own team, so a key can't
         # be widened beyond it. An empty list means all the team's models.
+        settings = get_settings()
+        if settings.FEATURE_TEAMS_ENABLED and not info.get("team_id"):
+            # A key from before teams: no team to check against, and "all"
+            # would mean every model on the proxy.
+            raise HTTPException(
+                status_code=400,
+                detail=f"This key has no {settings.team_word()}, so its models can't be changed",
+            )
         kwargs["models"] = await _checked_models(client, body.models, info.get("team_id"))
     if body.max_budget is not None:
         kwargs["max_budget"] = body.max_budget

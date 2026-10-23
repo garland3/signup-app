@@ -53,7 +53,9 @@ async function loadModelOptions() {
     }
     if (seq !== modelsRequest) return;  // a newer request (team changed) wins
     if (models.length === 0) {
-        allBox.checked = true;
+        // As above, "All" stays as the user set it; unchecked, Create asks
+        // them to choose all models (none, for a project without any).
+        allBox.disabled = false;
         syncModelList();
         hint.textContent = teamsEnabled
             ? "This " + teamWord(false) + " has no models yet. Ask your administrators."
