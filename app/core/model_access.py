@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 ALL_PROXY_MODELS = "all-proxy-models"
 NO_DEFAULT_MODELS = "no-default-models"
 PROXY_MODELS_TTL_SECONDS = 60
+MAX_MODELS_PER_REQUEST = 100  # request schema caps (422 beyond them)
+MAX_MODEL_NAME_LENGTH = 256
 
 _proxy_models_cache: tuple[float, list[str]] | None = None
 

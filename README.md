@@ -168,7 +168,14 @@ project (or, without teams, the proxy) lists, or match one of its wildcards:
 a team list with `openai/*` allows `openai/gpt-4o`. This is stricter than
 LiteLLM on purpose: an access-group name that isn't in the list is refused
 (400), even if LiteLLM would expand it. Under group overage (`TEAM_SOURCE=claims`),
-`GET /api/models` is refused with the same 403 as key creation. See
+`GET /api/models` is refused with the same 403 as key creation. A request may
+name at most 100 models, each at most 256 characters (422 beyond that).
+
+**Upgrading:** `models` on `POST /api/keys` and `PATCH /api/keys/{token}` was
+passed to LiteLLM unchecked before. It is now checked, so existing automation
+that sends access-group names, aliases or models outside the key's team gets
+a 400. Send names from `GET /api/models` instead, or add them to the team's
+`models` list. See
 [docs/2026-10-22-keys-per-project-and-models.md](docs/2026-10-22-keys-per-project-and-models.md).
 
 ## Key lifetimes (`MAX_KEY_DURATION`)

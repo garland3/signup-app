@@ -357,3 +357,30 @@ async def test_malformed_team_info_fails_closed(body):
     assert listed.status_code == created.status_code == updated.status_code == 502
     assert not proxy.called  # not read as an unrestricted team
     assert not gen.called and not upd.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_key_to_all_models_skips_the_team_lookup():
+    info = respx.get(f"{LITELLM}/team/info")
+    upd = _mock_owned_key()
+    async with _client(_app()) as c:
+        r = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": []})
+    assert r.status_code == 200
+    assert json.loads(upd.calls.last.request.content)["models"] == []
+    assert not info.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("models", [["m"] * 101, ["x" * 257]])
+async def test_oversized_model_lists_are_refused(models):
+    gen = _mock_create()
+    upd = _mock_owned_key()
+    async with _client(_app()) as c:
+        created = await c.post("/api/keys", headers=AUTH, json={
+            "name": "k", "team_id": "team-alpha", "models": models,
+        })
+        updated = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": models})
+    assert created.status_code == updated.status_code == 422
+    assert not gen.called and not upd.called

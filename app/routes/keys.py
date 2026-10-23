@@ -1,17 +1,25 @@
 import logging
 import re
 from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.audit import audit
 from app.core import durations
 from app.core.config import RESERVED_KEY_METADATA, get_settings
 from app.core.litellm_client import DuplicateKeyAliasError, LiteLLMClient
-from app.core.model_access import check_models, models_for, requested_models
+from app.core.model_access import (
+    MAX_MODEL_NAME_LENGTH,
+    MAX_MODELS_PER_REQUEST,
+    check_models,
+    models_for,
+    requested_models,
+)
 from app.core.rate_limit import limiter
 from app.core.team_claims import refresh_groups, teams_for_groups
+from app.core.team_membership import require_member
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +51,16 @@ def _reject_raw_api_key(token: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid key identifier")
 
 
+ModelList = Annotated[
+    list[Annotated[str, Field(max_length=MAX_MODEL_NAME_LENGTH)]] | None,
+    Field(max_length=MAX_MODELS_PER_REQUEST),
+]
+
+
 class CreateKeyRequest(BaseModel):
     name: str
     duration: str | None = None
-    models: list[str] | None = None
+    models: ModelList = None
     max_budget: float | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
@@ -58,7 +72,7 @@ class CreateKeyRequest(BaseModel):
 
 class UpdateKeyRequest(BaseModel):
     key_alias: str | None = None
-    models: list[str] | None = None
+    models: ModelList = None
     max_budget: float | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
@@ -375,20 +389,8 @@ async def create_key(body: CreateKeyRequest, request: Request):
                     else f"Keys belong to {settings.team_word(True)}: join one before creating a key."
                 ),
             )
-        if from_claims:
-            # The identity provider's current groups, not the session's.
-            groups = await refresh_groups(request)
-        try:
-            if from_claims:
-                teams = await teams_for_groups(groups, client)
-            else:
-                teams = await client.list_teams(user_id=user_id)
-        except Exception as e:
-            raise _upstream_error("list_teams", e)
-        if body.team_id not in {t.get("team_id") for t in teams}:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid {settings.team_word()} for this user"
-            )
+        # The identity provider's current groups (claims), not the session's.
+        await require_member(request, client, body.team_id, refresh_claims=True)
         team_id = body.team_id
 
     # The key's models: a subset of what its team allows (no teams: the

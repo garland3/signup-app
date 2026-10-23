@@ -49,7 +49,9 @@ offered. The proxy's model list is cached for 60 seconds.
   membership comes from the sign-in's groups, as for `/api/me`; under group
   overage the request is refused with the same 403 as key creation. The
   picker and the create/update checks share one lookup (`models_for`), so
-  they can't disagree.
+  they can't disagree; so does the membership check (`require_member`, in
+  `app/core/team_membership.py`). A request may name at most 100 models, each
+  at most 256 characters.
 - **`POST /api/keys`** accepts `models` as before. Each requested model must be
   in the team's allowed list, or match one of its wildcards (`openai/*` allows
   `openai/gpt-4o`), or the request fails with 400 before anything is created.
@@ -112,6 +114,10 @@ interception) to show those two states; the rest is the running app.
    `MAX_ACTIVE_KEYS_PER_USER=` (blank), then restart the app.
 3. Make sure each project's LiteLLM team has the right `models` list: that is
    what users can pick from.
+4. Tell anyone with automation against `POST /api/keys` or
+   `PATCH /api/keys/{token}`: `models` is now checked, so access-group names,
+   aliases or models outside the key's team get a 400 (they were passed
+   through before). Names from `GET /api/models` work.
 
 ## Out of scope
 
