@@ -18,8 +18,7 @@ from app.core.model_access import (
     requested_models,
 )
 from app.core.rate_limit import limiter
-from app.core.team_claims import refresh_groups, teams_for_groups
-from app.core.team_membership import require_member
+from app.core.team_membership import is_member, member_teams, require_member
 
 logger = logging.getLogger(__name__)
 
@@ -531,12 +530,8 @@ async def _require_current_team(request: Request, client: LiteLLMClient, info: d
     ):
         audit("rate_limited", bucket="key_change", user=request.state.user_email)
         raise HTTPException(status_code=429, detail="Too many key changes")
-    groups = await refresh_groups(request)
-    try:
-        teams = await teams_for_groups(groups, client)
-    except Exception as e:
-        raise _upstream_error("list_teams", e)
-    if not info.get("team_id") or info["team_id"] not in {t["team_id"] for t in teams}:
+    teams = await member_teams(request, client, refresh_claims=True)
+    if not is_member(teams, info.get("team_id")):
         raise HTTPException(
             status_code=403,
             detail=f"You're no longer in this key's {s.team_word()}, so it can't be changed or "

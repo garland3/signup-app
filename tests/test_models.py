@@ -384,3 +384,19 @@ async def test_oversized_model_lists_are_refused(models):
         updated = await c.patch("/api/keys/tok_m", headers=AUTH, json={"models": models})
     assert created.status_code == updated.status_code == 422
     assert not gen.called and not upd.called
+
+
+@pytest.mark.parametrize("model, allowed, expected", [
+    ("openai/gpt-4o", ["openai/*"], True),
+    ("openai/*", ["openai/*"], True),  # the entry itself
+    ("openai/*", ["*"], False),  # a requested wildcard must be an entry exactly
+    ("*", ["openai/*"], False),
+    ("gpt-4", ["gpt-?"], False),  # only * is special
+    ("gpt-?", ["gpt-?"], True),
+    ("gpt-4", ["gpt-[0-9]"], False),
+    ("axb", ["a.b*"], False),  # regex characters are literal
+    ("a.b-mini", ["a.b*"], True),
+])
+def test_is_allowed_treats_only_star_as_a_wildcard(model, allowed, expected):
+    from app.core.model_access import is_allowed
+    assert is_allowed(model, allowed) is expected

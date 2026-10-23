@@ -14,13 +14,13 @@ from app.core.team_claims import overage_detail, refresh_groups, session_teams, 
 logger = logging.getLogger(__name__)
 
 
-async def require_member(
-    request: Request, client: LiteLLMClient, team_id: str, *, refresh_claims: bool
-) -> None:
-    """A 400 unless ``team_id`` is one of the caller's teams; 502 if LiteLLM
-    can't say. With TEAM_SOURCE=claims the teams come from the groups: the
-    identity provider's current ones when ``refresh_claims`` (before a key is
-    made), else the sign-in's (read-only views). Group overage is a 403."""
+async def member_teams(
+    request: Request, client: LiteLLMClient, *, refresh_claims: bool
+) -> list[dict]:
+    """The caller's teams; 502 if LiteLLM can't say. With TEAM_SOURCE=claims
+    they come from the groups: the identity provider's current ones when
+    ``refresh_claims`` (before a key is made or widened), else the sign-in's
+    (read-only views). Group overage is a 403."""
     s = get_settings()
     claims = s.TEAM_SOURCE == "claims"
     groups = await refresh_groups(request) if claims and refresh_claims else None
@@ -36,5 +36,18 @@ async def require_member(
         raise HTTPException(status_code=502, detail="Upstream service error")
     if teams is None:  # the sign-in's token left the groups out
         raise HTTPException(status_code=403, detail=overage_detail(s))
-    if team_id not in {t.get("team_id") for t in teams}:
+    return teams
+
+
+def is_member(teams: list[dict], team_id: str | None) -> bool:
+    return bool(team_id) and team_id in {t.get("team_id") for t in teams}
+
+
+async def require_member(
+    request: Request, client: LiteLLMClient, team_id: str, *, refresh_claims: bool
+) -> None:
+    """A 400 unless ``team_id`` is one of the caller's teams (``member_teams``)."""
+    teams = await member_teams(request, client, refresh_claims=refresh_claims)
+    if not is_member(teams, team_id):
+        s = get_settings()
         raise HTTPException(status_code=400, detail=f"Invalid {s.team_word()} for this user")

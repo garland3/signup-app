@@ -7,8 +7,8 @@ the proxy is allowed.
 """
 from __future__ import annotations
 
-import fnmatch
 import logging
+import re
 import time
 
 from fastapi import HTTPException
@@ -56,16 +56,27 @@ async def allowed_models(client: LiteLLMClient, team: dict | None) -> list[str]:
     return sorted({m for m in listed if m != NO_DEFAULT_MODELS})
 
 
+def _wildcard(pattern: str, model: str) -> bool:
+    """Whether ``model`` matches ``pattern``, where only ``*`` is special (any
+    run of characters). ``?`` and ``[...]`` are literal, unlike fnmatch."""
+    regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+    return re.fullmatch(regex, model, flags=re.DOTALL) is not None
+
+
 def is_allowed(model: str, allowed: list[str]) -> bool:
     """Whether ``model`` is one of ``allowed``, or matches one of its wildcards
     (a team list's ``openai/*`` allows ``openai/gpt-4o``, as in LiteLLM).
 
-    Anything else is refused, including an access-group name the team doesn't
-    list: keys may only name what the project lists or a wildcard covers.
+    A requested name with a ``*`` must be an allowed entry exactly, so a key
+    can't ask for a wildcard wider than the team's. Anything else is refused,
+    including an access-group name the team doesn't list: keys may only name
+    what the project lists or a wildcard covers.
     """
-    return any(
-        model == a or ("*" in a and fnmatch.fnmatchcase(model, a)) for a in allowed
-    )
+    if model in allowed:
+        return True
+    if "*" in model:
+        return False
+    return any("*" in a and _wildcard(a, model) for a in allowed)
 
 
 async def models_for(client: LiteLLMClient, team_id: str | None, team_word: str) -> list[str]:

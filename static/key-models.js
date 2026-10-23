@@ -29,6 +29,7 @@ async function loadModelOptions() {
         teamsEnabled ? "All models in this " + teamWord(false) : "All models";
     list.textContent = "";
     hint.textContent = "";
+    document.getElementById("key-models-retry").classList.add("hidden");
     allBox.disabled = true;
     var teamId = selectedTeamId();
     if (teamsEnabled && !teamId) return;
@@ -41,9 +42,13 @@ async function loadModelOptions() {
         models = (await r.json()).models || [];
     } catch (e) {
         if (seq !== modelsRequest) return;
-        allBox.checked = true;
+        // Leave "All" as the user set it: a key meant to be limited mustn't
+        // quietly become unrestricted. Unchecked, with nothing to pick,
+        // Create asks for a choice; they can choose all models or try again.
+        allBox.disabled = false;
         syncModelList();
-        hint.textContent = "Couldn't load the list of models, so the key will allow all of them.";
+        hint.textContent = "Couldn't load the list of models.";
+        document.getElementById("key-models-retry").classList.remove("hidden");
         return;
     }
     if (seq !== modelsRequest) return;  // a newer request (team changed) wins
@@ -86,3 +91,4 @@ function selectedModels() {
 
 document.getElementById("key-team").addEventListener("change", loadModelOptions);
 document.getElementById("key-models-all").addEventListener("change", syncModelList);
+document.getElementById("key-models-retry").addEventListener("click", loadModelOptions);

@@ -56,7 +56,8 @@ offered. The proxy's model list is cached for 60 seconds.
   in the team's allowed list, or match one of its wildcards (`openai/*` allows
   `openai/gpt-4o`), or the request fails with 400 before anything is created.
   This is deliberately stricter than LiteLLM: an access-group name that isn't
-  in the list is refused, and so is a blank model name (so `[""]` can't mean
+  in the list is refused, and so is a requested name with a `*` that isn't an
+  entry itself (only `*` is a wildcard; `?` and `[...]` are literal), and a blank model name (so `[""]` can't mean
   "all"). If the team or the proxy's model list can't be read, or `/team/info`
   has no `team_info.models` list, the request fails (400 for a missing team,
   502 otherwise) and nothing is created. An empty or missing `models` means "all of the project's models":
@@ -71,6 +72,9 @@ offered. The proxy's model list is cached for 60 seconds.
   checkbox "All models in this {project}" (checked by default). Unchecking it
   shows one checkbox per allowed model. The list reloads when the project
   changes. Picking no models with "All" unchecked is refused with a message.
+  If the list can't be loaded, "All" stays as the user set it (a key meant to
+  be limited isn't quietly made unrestricted) and a "Try again" button
+  reloads it.
 - **Keys table:** a Models column showing a key's models, or "All".
 
 ### Code layout
