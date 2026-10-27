@@ -160,6 +160,15 @@ async def teams_for_groups(groups: list[str], client: LiteLLMClient) -> list[dic
     return out
 
 
+async def session_teams(request: Request, client: LiteLLMClient) -> list[dict] | None:
+    """The person's teams from their sign-in's groups, without a token refresh,
+    for read-only views (/api/me, /api/models). None when the token left the
+    groups out (overage): the teams are unknown, not none."""
+    if request.session.get("groups_overage"):
+        return None
+    return await teams_for_groups(session_groups(request), client)
+
+
 def session_groups(request: Request) -> list[str]:
     session = getattr(request, "session", None) or {}
     return list(session.get("groups") or [])

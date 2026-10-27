@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 
 from app.core.config import get_settings
 from app.core.litellm_client import LiteLLMClient
-from app.core.team_claims import session_groups, teams_for_groups
+from app.core.team_claims import session_teams
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +37,13 @@ async def me(request: Request):
 
 async def _claim_teams(request: Request) -> tuple[list[dict], bool]:
     """Teams from the sign-in's groups (re-checked when a key is made or changed)."""
-    if request.session.get("groups_overage"):
-        return [], False  # unknown, not none: the token left them out
     try:
-        teams = await teams_for_groups(session_groups(request), LiteLLMClient(get_settings()))
+        teams = await session_teams(request, LiteLLMClient(get_settings()))
     except Exception as e:
         logger.warning("Could not load teams for %s: %s", request.state.user_id, e)
         return [], False
+    if teams is None:
+        return [], False  # unknown, not none: the token left them out
     return teams, True
 
 

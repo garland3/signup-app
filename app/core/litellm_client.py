@@ -315,6 +315,31 @@ class LiteLLMClient:
         r.raise_for_status()
         return _extract_team_list(r.json())
 
+    async def get_team(self, team_id: str) -> dict | None:
+        """GET /team/info?team_id=... -> the team record, or None if it doesn't exist.
+
+        Raises on a reply without a ``team_info`` record and its ``models``
+        list: read as "no list", that would mean every model on the proxy.
+        """
+        r = await self._client().get(
+            "/team/info", params={"team_id": team_id}, headers=self._headers()
+        )
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        body = r.json()
+        info = body.get("team_info") if isinstance(body, dict) else None
+        if not isinstance(info, dict) or not isinstance(info.get("models"), list):
+            raise ValueError("Unexpected /team/info response: no team_info.models list")
+        return info
+
+    async def list_models(self) -> list[str]:
+        """GET /v1/models -> IDs of every model on the proxy (with the admin key)."""
+        r = await self._client().get("/v1/models", headers=self._headers())
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        return sorted({m["id"] for m in data if isinstance(m, dict) and m.get("id")})
+
     async def list_available_teams(self, user_id: str) -> list[dict]:
         """GET /team/available?user_id=... -> teams the user may join.
 

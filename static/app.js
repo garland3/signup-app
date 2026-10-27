@@ -375,6 +375,7 @@ function renderKeys() {
         appendCell(tr, k.display_name || k.name);
         if (teamsEnabled) appendCell(tr, teamLabel(k)).className = "team-cell";
         appendMetadataCells(tr, k, cols.filter(besideTeam));
+        appendCell(tr, modelsLabel(k)).className = "models-cell";
 
         var prefixCell = document.createElement("td");
         var prefixSpan = document.createElement("span");
@@ -442,6 +443,9 @@ function showCreateModal() {
         if (el) el.value = "";
     });
     renderTeamSelect();
+    document.getElementById("key-models-all").checked = true;
+    syncModelList();
+    loadModelOptions();
     clearCreateError();
     var teamErr = teamRequirementError();
     if (teamErr) showCreateError(teamErr);
@@ -542,6 +546,15 @@ async function createKey() {
     } else if (userTeams.length > 1) {
         var teamSel = document.getElementById("key-team");
         if (teamSel && teamSel.value) body.team_id = teamSel.value;
+    }
+
+    var models = selectedModels();
+    if (models !== null) {
+        if (models.length === 0) {
+            showCreateError("Pick at least one model, or choose all models.");
+            return;
+        }
+        body.models = models;
     }
 
     var metadata = {};
