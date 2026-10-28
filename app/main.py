@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from pathlib import Path
 
@@ -106,6 +108,28 @@ def _enforce_startup_safety(settings) -> None:
             "named like a team would grant it)"
         )
 
+    if settings.RECONCILE_ENABLED:
+        if not (settings.FEATURE_TEAMS_ENABLED and settings.TEAM_SOURCE == "claims"):
+            problems.append(
+                "RECONCILE_ENABLED=true requires FEATURE_TEAMS_ENABLED=true and TEAM_SOURCE=claims"
+            )
+        if not settings.GRAPH_TENANT_ID:
+            problems.append("RECONCILE_ENABLED=true requires GRAPH_TENANT_ID")
+        if not (settings.GRAPH_CLIENT_ID or settings.OAUTH_CLIENT_ID) or not (
+            settings.GRAPH_CLIENT_SECRET or settings.OAUTH_CLIENT_SECRET
+        ):
+            problems.append(
+                "RECONCILE_ENABLED=true requires GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET "
+                "(or OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET)"
+            )
+        if settings.RECONCILE_INTERVAL_SECONDS < 60:
+            problems.append("RECONCILE_INTERVAL_SECONDS must be at least 60")
+        if settings.OAUTH_USER_ID_FIELD == "sub":
+            problems.append(
+                "RECONCILE_ENABLED=true can't match people keyed by OAUTH_USER_ID_FIELD=sub "
+                "(Entra ID's sub differs per application); use oid or the email"
+            )
+
     if settings.AUTH_MODE == "oauth" and not settings.SESSION_SECRET:
         problems.append("SESSION_SECRET must be set when AUTH_MODE=oauth")
 
@@ -137,7 +161,21 @@ def create_app():
     # Intentionally do NOT pass root_path= to FastAPI: we prefix routes
     # explicitly instead, which keeps path matching and URL generation
     # consistent regardless of whether a reverse proxy strips the prefix.
-    app = FastAPI(title="Signup App")
+    lifespan = None
+    if settings.RECONCILE_ENABLED:
+        from app.core.key_reconciler import run_periodically
+
+        @contextlib.asynccontextmanager
+        async def lifespan(app):
+            task = asyncio.create_task(run_periodically(settings))
+            try:
+                yield
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title="Signup App", lifespan=lifespan)
     app.state.settings = settings
 
     # AuthMiddleware is added first so it runs *after* SessionMiddleware on the

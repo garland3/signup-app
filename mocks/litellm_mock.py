@@ -245,6 +245,7 @@ async def generate_key(body: GenerateKeyRequest, authorization: str = Header()):
 @app.get("/key/list")
 async def list_keys(
     user_id: str = "",
+    team_id: str = "",
     return_full_object: str = "false",
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
@@ -258,6 +259,8 @@ async def list_keys(
     result = []
     for k in keys_db.values():
         if user_id and k["user_id"] != user_id:
+            continue
+        if team_id and k.get("team_id") != team_id:
             continue
         # Return a copy without the full key
         entry = {**k}

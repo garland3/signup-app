@@ -37,6 +37,8 @@ signup-app/
             config.py        # Pydantic settings, env vars
             middleware.py    # Auth middleware (header extraction + debug bypass)
             litellm_client.py # HTTP client wrapping LiteLLM admin API
+            entra_directory.py # Microsoft Graph: group and app-role members
+            key_reconciler.py # Periodic blocking of keys outside a project's group
         routes/
             health.py        # Health check endpoint
             users.py         # User info endpoint

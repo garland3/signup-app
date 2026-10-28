@@ -38,6 +38,30 @@ class Settings(BaseSettings):
     # seconds, or 60 (team_claims.SIGN_IN_GRACE_SECONDS), whichever is longer;
     # older ones need a new sign-in.
     TEAM_CLAIMS_MAX_AGE_SECONDS: int = 0
+    # TEAM_SOURCE=claims with Microsoft Entra ID: block the keys of people no
+    # longer in a project's group or app role (key_reconciler.py). Every
+    # RECONCILE_INTERVAL_SECONDS the app reads each project team's current
+    # members from Microsoft Graph and blocks keys in the team whose owner isn't
+    # one. RECONCILE_DRY_RUN only logs what it would block. A run that would
+    # block more than RECONCILE_MAX_BLOCKS_PER_RUN keys blocks none.
+    # RECONCILE_KEYS_WITHOUT_TEAM also blocks keys with no team (made before
+    # teams) whose owner is in no project.
+    RECONCILE_ENABLED: bool = False
+    RECONCILE_DRY_RUN: bool = True
+    RECONCILE_INTERVAL_SECONDS: int = 900
+    RECONCILE_MAX_BLOCKS_PER_RUN: int = 50
+    RECONCILE_KEYS_WITHOUT_TEAM: bool = False
+    # Microsoft Graph access for the reconciler (client credentials). The app
+    # registration needs the application permissions GroupMember.Read.All,
+    # User.Read.All and, with GROUPS_FIELD=roles, Application.Read.All.
+    # Client ID and secret default to OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET.
+    GRAPH_TENANT_ID: str = ""
+    GRAPH_CLIENT_ID: str = ""
+    GRAPH_CLIENT_SECRET: str = ""
+    # Other clouds: https://graph.microsoft.us/v1.0 and
+    # https://login.microsoftonline.us (US Government).
+    GRAPH_BASE_URL: str = "https://graph.microsoft.com/v1.0"
+    GRAPH_LOGIN_URL: str = "https://login.microsoftonline.com"
     # What the UI and messages call a team, for deployments with their own word
     # for it (e.g. "Project"), and its plural if adding an "s" isn't it (e.g.
     # "Classes"). API field names stay team_*.
