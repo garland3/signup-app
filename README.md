@@ -551,7 +551,8 @@ does), and stays a member of the LiteLLM team. The app itself refuses them new
 keys in that team, and changes or unblocking of their keys there (both re-read
 their groups first); they can still block or delete those keys.
 
-A deployment using `TEAM_SOURCE=claims` must therefore run a reconciler beside
+**With Microsoft Entra ID the app can do this itself** (`RECONCILE_ENABLED=true`,
+see below). Otherwise, a deployment using `TEAM_SOURCE=claims` must run a reconciler beside
 the app, which periodically, for each team:
 
 1. reads the identity provider's current members of the team's group;
@@ -569,6 +570,38 @@ provisioning (the design in PR #42), or a job reading the identity provider's
 admin API (the platform this app was first deployed with runs one in its key
 broker). The integration tests below check step 2's behavior against a real
 LiteLLM.
+
+#### The built-in reconciler (Entra ID)
+
+With `RECONCILE_ENABLED=true`, every `RECONCILE_INTERVAL_SECONDS` (default 900)
+the app reads each project team's current members from Microsoft Graph and
+**blocks** the keys in the team whose owner isn't one of them. A blocked key stops
+working in LiteLLM at once; someone back in the group can unblock theirs in the
+app, which re-checks their groups first.
+
+- **Which teams:** the teams that are projects at sign-in: their `team_id` or
+  `team_alias` starts with `TEAM_GROUP_PREFIX`. That name is looked up as a group
+  object ID (or exact group name), or with `GROUPS_FIELD=roles` as an app role
+  value on the sign-in application. Disabled accounts aren't members.
+- **Who:** a key's `user_id` (the email, or the object ID with
+  `OAUTH_USER_ID_FIELD=oid`) is compared without case to each member's mail,
+  user principal name and object ID. Keys with no owner are left alone.
+  `OAUTH_USER_ID_FIELD=sub` is refused at startup: Entra ID's `sub` differs per
+  application, so it can't be matched.
+- **Fails safe:** a team whose group or role can't be read, isn't found, has no
+  members, or whose name two teams share is skipped; a run that would block more
+  than `RECONCILE_MAX_BLOCKS_PER_RUN` (default 50) keys blocks none.
+- **Start in dry run:** `RECONCILE_DRY_RUN=true` (the default) only logs
+  `reconcile_would_block` lines. Check them, then set it to `false`.
+- **Keys without a team** (made before teams): with
+  `RECONCILE_KEYS_WITHOUT_TEAM=true`, those whose owner is in no project are
+  blocked too, but only in a run that read every project.
+- **Graph access:** `GRAPH_TENANT_ID`, plus the app registration's client ID and
+  secret (`GRAPH_CLIENT_ID`/`GRAPH_CLIENT_SECRET`, default the `OAUTH_` ones), with
+  the application permissions `GroupMember.Read.All` and `User.Read.All`, and
+  `Application.Read.All` with `GROUPS_FIELD=roles`, admin-consented.
+- Runs in the app process: run one replica (sessions are in memory anyway).
+  Each run logs `reconcile_run` with the counts.
 
 ## API Endpoints
 

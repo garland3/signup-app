@@ -198,8 +198,9 @@ class LiteLLMClient:
         r.raise_for_status()
         return r.json()
 
-    async def list_keys(self, user_id: str) -> dict:
-        """GET /key/list?user_id=..., every page: ``{"keys": [...]}``.
+    async def list_keys(self, user_id: str | None = None, *, team_id: str | None = None) -> dict:
+        """GET /key/list?user_id=... (or ?team_id=..., or every key), every page:
+        ``{"keys": [...]}``.
 
         LiteLLM pages the list (10 keys by default), so this asks for its
         largest page, newest first, and follows ``total_pages``. A key that
@@ -212,18 +213,18 @@ class LiteLLMClient:
         seen: set = set()
         page = 1
         while True:
-            r = await self._client().get(
-                "/key/list",
-                params={
-                    "user_id": user_id,
-                    "return_full_object": "true",
-                    "page": str(page),
-                    "size": str(KEY_LIST_PAGE_SIZE),
-                    "sort_by": "created_at",
-                    "sort_order": "desc",
-                },
-                headers=self._headers(),
-            )
+            params = {
+                "return_full_object": "true",
+                "page": str(page),
+                "size": str(KEY_LIST_PAGE_SIZE),
+                "sort_by": "created_at",
+                "sort_order": "desc",
+            }
+            if user_id is not None:
+                params["user_id"] = user_id
+            if team_id is not None:
+                params["team_id"] = team_id
+            r = await self._client().get("/key/list", params=params, headers=self._headers())
             r.raise_for_status()
             data = r.json()
             batch = data if isinstance(data, list) else data.get("keys") or []
@@ -238,7 +239,7 @@ class LiteLLMClient:
             if page >= KEY_LIST_MAX_PAGES:
                 logger.warning(
                     "key list for %s stopped at %d pages of %d (of %d)",
-                    user_id, page, KEY_LIST_PAGE_SIZE, total_pages,
+                    user_id or team_id or "all keys", page, KEY_LIST_PAGE_SIZE, total_pages,
                 )
                 break
             page += 1
