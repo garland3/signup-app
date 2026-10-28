@@ -958,27 +958,3 @@ async def test_models_under_groups_overage_is_refused_as_key_creation_is():
     assert r.status_code == 403
     assert r.json()["detail"] == team_claims.overage_detail(_claims_settings())
     assert not info.called
-
-
-@pytest.mark.asyncio
-@respx.mock
-@pytest.mark.parametrize("groups, kept", [
-    (GROUPS, ["project-alpha", "project-gamma", "project-general"]),
-    (["/project-alpha"], []),  # a Keycloak group path: no prefix match
-    (None, []),  # no groups claim at all
-])
-async def test_sign_in_logs_the_groups_received_and_kept(monkeypatch, groups, kept):
-    from app.routes import auth as auth_routes
-
-    events = []
-    monkeypatch.setattr(auth_routes, "audit", lambda event, **f: events.append((event, f)))
-    _mock_provider()
-    _litellm()
-    provider = Provider(groups)
-    respx.post(TOKEN_URL).mock(side_effect=provider)
-    async with AsyncClient(transport=ASGITransport(app=_app(_claims_settings())), base_url="http://test") as c:
-        await _sign_in(c, provider)
-    logged = dict(events)["team_claims_sign_in"]
-    assert logged["received"] == groups
-    assert logged["kept"] == kept
-    assert logged["prefix"] == "project-"

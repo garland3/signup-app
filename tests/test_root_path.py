@@ -117,21 +117,3 @@ async def test_root_path_proxy_auth_middleware_honours_prefix():
         )
         assert r.status_code == 200
         assert r.json()["email"] == "alice@example.com"
-
-
-@pytest.mark.asyncio
-async def test_asset_links_carry_a_content_version():
-    # A release that changes style.css changes its URL, so browsers don't
-    # keep using the previous release's copy.
-    import hashlib
-    import re
-
-    _install_settings(ROOT_PATH="")
-    app = main_mod.create_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        html = (await c.get("/")).text
-        css = (main_mod.STATIC_DIR / "style.css").read_bytes()
-        assert f'/static/style.css?v={hashlib.sha256(css).hexdigest()[:12]}"' in html
-        for src in re.findall(r'src="(/static/[^"]+)"', html):
-            assert "?v=" in src
-            assert (await c.get(src)).status_code == 200

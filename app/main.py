@@ -1,6 +1,4 @@
-import hashlib
 import logging
-import re
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -31,21 +29,6 @@ NO_STORE_PATHS = (
     "/api/auth/",
     "/api/dashboard",
 )
-
-
-def _versioned_assets(html: str) -> str:
-    """Add ``?v=<content hash>`` to the page's /static CSS and JS links, so a
-    browser fetches each file again when a release changes it instead of
-    reusing a copy it kept from the previous one."""
-
-    def version(match: re.Match) -> str:
-        path = STATIC_DIR / match.group(2)
-        if not path.is_file():
-            return match.group(0)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
-        return f"{match.group(1)}{match.group(2)}?v={digest}\""
-
-    return re.sub(r'(/static/)([\w.-]+\.(?:css|js))"', version, html)
 
 
 def _enforce_startup_safety(settings) -> None:
@@ -229,9 +212,9 @@ def create_app():
 
         # Render index.html with the configured root path substituted so
         # asset URLs and the frontend API base path are prefix-aware.
-        index_html = _versioned_assets((STATIC_DIR / "index.html").read_text().replace(
+        index_html = (STATIC_DIR / "index.html").read_text().replace(
             "{{ROOT_PATH}}", root_path
-        ))
+        )
 
         @app.get(f"{root_path}/")
         async def serve_frontend():
@@ -239,9 +222,9 @@ def create_app():
 
         dashboard_path = STATIC_DIR / "dashboard.html"
         if dashboard_path.exists():
-            dashboard_html = _versioned_assets(dashboard_path.read_text().replace(
+            dashboard_html = dashboard_path.read_text().replace(
                 "{{ROOT_PATH}}", root_path
-            ))
+            )
 
             @app.get(f"{root_path}/dashboard")
             async def serve_dashboard():

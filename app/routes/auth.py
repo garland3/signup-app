@@ -168,19 +168,7 @@ async def callback(request: Request):
     if s.FEATURE_TEAMS_ENABLED and s.TEAM_SOURCE == "claims":
         # Teams come from the identity provider: keep the groups, and the
         # refresh token to re-read them before a key is made or changed.
-        kept = store_groups(request.session, claims, s)
-        # What the provider sent and what the prefix kept, so an operator can
-        # see why someone has no teams (no claim, a group path, an ID).
-        received = claims.get(s.GROUPS_FIELD)
-        audit(
-            "team_claims_sign_in",
-            user=email,
-            claim=s.GROUPS_FIELD,
-            received=(received if isinstance(received, list) else [received])[:50]
-            if received is not None else None,
-            prefix=s.TEAM_GROUP_PREFIX,
-            kept=kept,
-        )
+        store_groups(request.session, claims, s)
         # A sign-in without a refresh token must not keep an earlier sign-in's.
         request.session.pop("refresh_token", None)
         if tokens.get("refresh_token"):

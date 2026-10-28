@@ -539,14 +539,6 @@ OAUTH_SCOPES=openid email profile offline_access  # Entra ID: offline_access, fo
 - Use it with `OAUTH_CLAIMS_SOURCE=id_token` for groups in the ID token (Keycloak:
   a group membership mapper on the client; Entra ID: app roles), or with
   userinfo if the provider puts the groups there.
-- **Someone sees "You aren't in any project"?** Each sign-in logs a
-  `team_claims_sign_in` line with the groups the provider sent (`received`)
-  and those that start with the prefix (`kept`):
-  `kubectl logs deploy/<app> | grep team_claims_sign_in`. No claim (`null`)
-  means the provider sends no groups (Keycloak: add a Group Membership mapper
-  to the client). `/project-alpha` means a group path (turn off "Full group
-  path"). Hex IDs mean group IDs, not names. A kept group must also be a
-  LiteLLM team's `team_alias` or `team_id`, exactly once.
 
 #### Required: a reconciler for people who leave
 
