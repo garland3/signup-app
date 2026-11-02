@@ -11,7 +11,7 @@
 
 # Build stage: Hardened Images Python builder (retains a shell, pip, and build
 # tooling so we can resolve and install dependencies into an isolated venv).
-FROM registry.access.redhat.com/hi/python:3.15.1-builder@sha256:88675838068606429a0c6e39337bfd7bc27a888c096e650f997cc9c560466f7c AS builder
+FROM registry.access.redhat.com/hi/python:3.15.2-builder@sha256:6722b7c488c8eeb3722f51bdc3c98062031f94913f117a1281c85723fd534442 AS builder
 USER root
 ENV HOME=/root
 WORKDIR /app
@@ -54,7 +54,7 @@ RUN --mount=type=secret,id=corp_ca \
 # Runtime stage: minimal distroless Hardened Image (no shell, no package
 # manager) for a near-zero-CVE footprint, pinned to the matching 3.15 runtime
 # digest. Only the venv and app code ship.
-FROM registry.access.redhat.com/hi/python:3.15.1@sha256:34105beff4de6c524595e139b2055ba3a8a240890bd185e7c27d1c755658e2e4 AS runtime
+FROM registry.access.redhat.com/hi/python:3.15.2@sha256:02891196c7c07ca9bfddaaa74f11f8381ae4473d84533aac0552ec705a5f4116 AS runtime
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
